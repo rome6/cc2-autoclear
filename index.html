@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC2 Auto Clear</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --edge: #d9dde3; --fg: #1b1f24; --muted: #5d6673;
+  --accent: #0e8f9c; --accent-soft: #e1f3f5; --warn: #a15c00; --bad: #c2362f; --ok: #237a3b;
+  --plate: #eef0f3; --part: #5b8def; --column: rgba(14,143,156,.10); --column-edge: rgba(14,143,156,.45);
+  --code: #f1f3f5; --stage: #e9ecf0; --scoop: #e8833a; --head: #8a93a0; --plate-top: #c9ced6; --grid: rgba(0,0,0,.07);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --panel: #1c2026; --edge: #2e343c; --fg: #e6e9ed; --muted: #98a1ad;
+    --accent: #3cc2cf; --accent-soft: #163338; --warn: #e3a34b; --bad: #f0706a; --ok: #6bcf86;
+    --plate: #252a31; --part: #7aa5ff; --column: rgba(60,194,207,.10); --column-edge: rgba(60,194,207,.45);
+    --code: #12151a; --stage: #101317; --scoop: #f39a4f; --head: #7d8896; --plate-top: #3a414b; --grid: rgba(255,255,255,.06);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+p.lead { color: var(--muted); margin: 0 0 18px; }
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .grid { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); } }
+.card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 14px; min-width: 0; }
+.drop { border: 2px dashed var(--edge); border-radius: 10px; padding: 22px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop strong { color: var(--fg); }
+details { border: 1px solid var(--edge); border-radius: 8px; margin-top: 8px; }
+summary { cursor: pointer; padding: 8px 10px; font-weight: 600; }
+.fields { display: grid; gap: 6px; padding: 4px 10px 10px; }
+.field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.field span { color: var(--muted); }
+input[type=number], select { width: 110px; padding: 5px 7px; border: 1px solid var(--edge); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+select { width: auto; min-width: 110px; }
+input.bad { border-color: var(--bad); }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+button { font: inherit; padding: 8px 14px; border-radius: 7px; border: 1px solid var(--edge); background: var(--panel); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.status { padding: 9px 11px; border-radius: 8px; margin-top: 10px; }
+.status.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.status.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.status.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+ul.facts { margin: 8px 0 0; padding-left: 18px; }
+ul.facts li { margin: 2px 0; }
+pre { background: var(--code); border: 1px solid var(--edge); border-radius: 8px; padding: 10px; max-height: 420px; overflow: auto; font-size: 12px; margin: 10px 0 0; white-space: pre; }
+svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.hint { color: var(--muted); font-size: 12px; }
+label.check { display: flex; gap: 8px; align-items: center; }
+h2.step { margin-top: 20px; }
+.sweeps { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 520px) { .sweeps { grid-template-columns: minmax(0, 1fr); } }
+#sideView { width: 100%; height: auto; background: var(--stage); border: 1px solid var(--edge); border-radius: 8px; }
+.sliders { display: grid; gap: 12px; }
+.slider .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.slider .top b { font-weight: 600; }
+.slider .top output { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.slider input[type=range] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+.slider .why { color: var(--muted); font-size: 12px; }
+.slider.off { opacity: .5; }
+details.advanced { margin-top: 16px; }
+details.advanced > summary { color: var(--muted); }
+details.advanced details { margin: 8px; }
+.viewer { position: relative; border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; background: var(--stage); }
+.viewer canvas { display: block; width: 100%; height: 460px; touch-action: none; cursor: grab; }
+.viewer canvas:active { cursor: grabbing; }
+.hud { position: absolute; left: 10px; bottom: 8px; right: 10px; pointer-events: none; font-size: 12px; text-shadow: 0 0 4px var(--stage), 0 0 2px var(--stage); }
+.hud #phase { font-weight: 600; }
+.hud .mono { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.views { position: absolute; right: 8px; top: 8px; display: flex; gap: 2px; }
+.views button { padding: 3px 8px; font-size: 12px; border-radius: 6px; background: var(--panel); }
+.views button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.player { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.player input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.player #play { width: 40px; padding: 6px 0; }
+.player select { min-width: 0; width: 64px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CC2 Auto Clear</h1>
+  <p class="lead">Adds the bed-clearing cycle to an ELEGOO Centauri Carbon 2 G-code: the purge line goes into the bin, and the print ends by cooling the bed, flexing the plate and sweeping the parts off the front. Everything runs in this page; your file never leaves the computer.</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1. File</h2>
+      <div id="drop" class="drop" tabindex="0">
+        <strong>Drop a .gcode here</strong> or click to choose one
+        <div id="fileName" class="hint"></div>
+      </div>
+      <input id="file" type="file" accept=".gcode,.gco,.g" hidden>
+      <div id="status"></div>
+      <ul id="facts" class="facts"></ul>
+
+      <h2 class="step">2. Sweeps</h2>
+      <p class="hint" id="sweepFor"></p>
+      <div class="sweeps">
+        <svg id="sideView" viewBox="0 0 280 230" role="img" aria-label="Side view of the sweep levels against the part"></svg>
+        <div id="sweepSliders" class="sliders"></div>
+      </div>
+      <p class="hint" id="sweepNote"></p>
+
+      <h2 class="step">3. Bender</h2>
+      <div id="benderSliders" class="sliders"></div>
+
+      <h2 class="step">4. Cooling and run</h2>
+      <div id="runSliders" class="sliders"></div>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="bendOnly"> Test: flex only (cools and flexes, no sweep; use it first)</label>
+      <div class="row">
+        <span>Copies in this file</span>
+        <input type="number" id="copies" min="1" max="20" step="1" value="1">
+        <span class="hint">each copy prints, clears the bed and starts the next</span>
+      </div>
+      <div class="row">
+        <span>Bed cool-down wait</span>
+        <select id="bedWait">
+          <option value="klipper">TEMPERATURE_WAIT</option>
+          <option value="marlin">M190 R</option>
+        </select>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced: scoop and gantry measurements, speeds</summary>
+        <div id="groups"></div>
+      </details>
+      <div class="row">
+        <button id="reset">Reset to defaults</button>
+        <span class="hint">Settings are remembered in this browser.</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3. The cycle, played from its G-code</h2>
+      <div class="viewer">
+        <canvas id="view" aria-label="3D view of the plate, the parts and the toolhead running the cycle"></canvas>
+        <div class="hud"><div id="phase"></div><div id="gline" class="mono"></div></div>
+        <div class="views">
+          <button data-view="3d" class="on">3D</button><button data-view="top">Top</button><button data-view="front">Front</button><button data-view="side">Side</button>
+        </div>
+      </div>
+      <div class="player">
+        <button id="play" class="primary" aria-label="Play">▶</button>
+        <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Cycle time">
+        <span id="clock" class="mono hint">0:00 / 0:00</span>
+        <select id="speed" aria-label="Playback speed">
+          <option value="2">2×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="30">30×</option>
+        </select>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--part)"></i>part</span>
+        <span><i style="background:var(--scoop)"></i>scoop</span>
+        <span><i style="background:var(--head)"></i>toolhead and gantry</span>
+        <span><i style="background:var(--bad)"></i>out of the scoop's reach</span>
+        <span><i style="background:var(--warn)"></i>purge bin</span>
+      </div>
+      <p class="hint">Drag to turn the view, scroll to zoom. Times are the real ones from the feed rates; cooling is shortened to a few seconds.</p>
+      <div class="row">
+        <button id="download" class="primary" disabled>Download processed G-code</button>
+        <button id="showCycle" disabled>Show the cycle</button>
+      </div>
+      <pre id="cycle" hidden></pre>
+    </section>
+  </div>
+</main>
+
+<script>
+// CORE-BEGIN: the same rules as CC2 Control's src/bed_clear.h, so both produce the same G-code.
+const MARK = 'CC2 Control automatic removal';
+const FARMLOOP_MARK = 'FarmLoop CC2';
+const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
+const BIN_X = 51, BIN_Y = 264, BIN_Y_ENTRY = 257; // ELEGOO's own flush position (printer_dsp.cfg)
+const BEHIND = 10; // a column's push starts with the scoop this far behind its parts
+const PASSES_MAX = 16, COLUMNS_MAX = 16, OBJECTS_MAX = 64, PURGE_SPAN = 64 * 1024;
+
+const FIELDS = [
+  // key, default, min, max, whole number, group, label
+  ['scoop_ahead', 40.35, 0, 150, 0, 'scoop', "Nozzle to the scoop's front face (mm)"],
+  ['scoop_offset_x', 3.55, -100, 100, 0, 'scoop', 'Scoop centre from the nozzle in X (mm)'],
+  ['scoop_width', 65.5, 10, 300, 0, 'scoop', 'Scoop width (mm)'],
+  ['column_overlap', 10, 0, 100, 0, 'scoop', 'Overlap between columns (mm)'],
+  ['past_edge', 4, 0, 50, 0, 'scoop', 'Scoop stops past the front edge by (mm)'],
+  ['scoop_low', 1.5, 0, 50, 0, 'scoop', "Scoop's bottom edge above the nozzle (mm)"],
+  ['scoop_high', 31, 1, 150, 0, 'scoop', "Scoop's top edge above the nozzle (mm)"],
+  ['gantry_low', 34, 1, 200, 0, 'scoop', 'Lowest point of the X gantry above the nozzle (mm)'],
+  ['push_z', 1, 0.2, 50, 0, 'sweep', 'Last sweep: plate under the nozzle by (mm)'],
+  ['last_pass_repeats', 1, 1, 5, 1, 'sweep', 'Times the last sweep runs'],
+  ['first_pass_below_top', 28, 0, 150, 0, 'sweep', 'First sweep: plate at part height minus (mm)'],
+  ['pass_step', 25, 1, 150, 0, 'sweep', 'Step between sweeps (mm)'],
+  ['return_above_pass', 40, 1, 255, 0, 'sweep', 'Bed drop to return between columns (mm)'],
+  ['max_part_height', 180, 1, 255, 0, 'sweep', 'Tallest part allowed (mm)'],
+  ['margin', 5, 0, 50, 0, 'sweep', 'Margin above the tallest part (mm)'],
+  ['bend_touch_z', 206, 0, 258, 0, 'bender', 'Z where the tab touches the bender'],
+  ['bend_bottom_z', 255, 0, 258, 0, 'bender', 'Z of the bed fully down'],
+  ['bend_before_z', 195, 0, 258, 0, 'bender', 'Fast move down to Z'],
+  ['bend_repeats', 2, 0, 10, 1, 'bender', 'Times the plate is flexed'],
+  ['bend_pause_ms', 1500, 0, 60000, 1, 'bender', 'Pause with the plate flexed (ms)'],
+  ['release_bed_temp', 30, 15, 80, 1, 'speed', 'Bed cool enough to release (°C)'],
+  ['blow_ms', 15000, 0, 120000, 1, 'speed', 'Last blow over the cleared plate (ms)'],
+  ['f_travel', 6000, 60, 30000, 1, 'speed', 'XY travel (mm/min)'],
+  ['f_z_fast', 600, 60, 3000, 1, 'speed', 'Fast Z (mm/min)'],
+  ['f_z_bend', 300, 30, 3000, 1, 'speed', 'Z while flexing (mm/min)'],
+  ['f_push', 1500, 60, 12000, 1, 'speed', 'Last sweep (mm/min)'],
+  ['f_push_high', 900, 60, 12000, 1, 'speed', 'Higher sweeps (mm/min)'],
+];
+const GROUPS = { scoop: 'Scoop', sweep: 'Sweeps', bender: 'Bender', speed: 'Temperature and speeds' };
+
+function defaults() {
+  const v = {};
+  for (const [key, value] of FIELDS) v[key] = value;
+  return { v, marlinWait: false, bendOnly: false };
+}
+function valueValid(key, value) {
+  const f = FIELDS.find(x => x[0] === key);
+  return f && Number.isFinite(value) && value >= f[2] && value <= f[3] && (!f[4] || Number.isInteger(value));
+}
+
+// printf's %.Nf: rounds the double's exact decimal value, ties to even (glibc), and %g.
+function fixed(x, digits) {
+  const exact = Math.abs(x).toFixed(80), dot = exact.indexOf('.');
+  const kept = BigInt(exact.slice(0, dot) + exact.slice(dot + 1, dot + 1 + digits));
+  const rest = exact.slice(dot + 1 + digits).replace(/0+$/, '');
+  const up = rest > '5' || (rest === '5' && kept % 2n === 1n);
+  const n = (kept + (up ? 1n : 0n)).toString().padStart(digits + 1, '0');
+  const text = digits ? `${n.slice(0, -digits)}.${n.slice(-digits)}` : n;
+  return x < 0 && /[1-9]/.test(text) ? '-' + text : text;
+}
+const g = x => String(Number(x.toPrecision(6)));
+const int = x => String(Math.trunc(x));
+
+function columnsOf(s) {
+  const width = s.v.scoop_width, step = width - s.v.column_overlap, out = [];
+  for (let x = width / 2; ; x += step) {
+    out.push(Math.min(x, PLATE - width / 2));
+    if (x + width / 2 >= PLATE || out.length >= COLUMNS_MAX) return out;
+  }
+}
+function passesOf(height, s) {
+  const out = [];
+  for (let d = height - s.v.first_pass_below_top; d > s.v.push_z + 3 && out.length < PASSES_MAX - 1; d -= s.v.pass_step)
+    out.push(Math.ceil(d * 10) / 10);
+  out.push(s.v.push_z);
+  return out;
+}
+function layoutBack(layout) {
+  let back = -1;
+  for (const o of layout || []) back = Math.max(back, o.y1);
+  return back;
+}
+function refusal(height, back, s, sweep) {
+  const v = s.v;
+  if (!(height > 0)) return 'The part height is unknown';
+  if (height > v.max_part_height) return 'The part is taller than the maximum part height';
+  if (height + v.margin > v.bend_before_z) return 'The part does not fit under the toolhead while the plate is flexed';
+  if (!(v.bend_before_z < v.bend_touch_z && v.bend_touch_z < v.bend_bottom_z))
+    return 'The bender heights must rise from the fast move to the touch point to the bottom';
+  if (!sweep) return null;
+  const passes = passesOf(height, s);
+  if (height >= passes[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
+  if (v.scoop_high <= v.scoop_low) return "The scoop's top edge must be above its bottom edge";
+  if (v.pass_step > v.scoop_high - v.scoop_low) return 'The step between sweeps is taller than the scoop';
+  if (v.pass_step >= v.gantry_low - v.scoop_low) return 'The step between sweeps would drive the gantry into what a sweep leaves behind';
+  if (Y_BACK - v.scoop_ahead <= Y_FRONT) return 'The scoop has no travel in Y';
+  if (back > Y_BACK - v.scoop_ahead) return 'A part stands at the back of the plate, behind where the scoop starts';
+  if (v.scoop_width <= v.column_overlap) return 'The column overlap must be smaller than the scoop';
+  return null;
+}
+// Height under each column (0: empty) and the furthest-back Y there. Without a layout every column
+// holds the tallest part up to the back edge; a part of unknown height counts as the tallest.
+function columnHeights(height, layout, s, columns) {
+  const half = s.v.scoop_width / 2;
+  return columns.map(c => {
+    if (!layout || !layout.length) return { under: height, back: Y_BACK };
+    let under = 0, back = Y_FRONT;
+    for (const o of layout)
+      if (o.x1 > c - half && o.x0 < c + half) {
+        under = Math.max(under, o.height > 0 ? Math.min(o.height, height) : height);
+        back = Math.max(back, o.y1);
+      }
+    return { under, back };
+  });
+}
+// Column centres, heights and where each push starts, for the cycle and the drawing.
+function sweepPlan(height, layout, s) {
+  const v = s.v, yEnd = Y_FRONT - v.past_edge + v.scoop_ahead, columns = columnsOf(s);
+  const heights = columnHeights(height, layout, s, columns);
+  return {
+    yEnd, passes: passesOf(height, s),
+    columns: columns.map((x, c) => ({
+      x, under: heights[c].under,
+      yStart: Math.max(Math.min(heights[c].back + BEHIND + v.scoop_ahead, Y_BACK), yEnd),
+    })),
+  };
+}
+
+function cycle(height, layout, s, sweep) {
+  if (refusal(height, layoutBack(layout), s, sweep)) return null;
+  const v = s.v, out = [], line = t => out.push(t);
+  const up = height + v.margin, zFast = int(v.f_z_fast), zBend = int(v.f_z_bend), release = int(v.release_bed_temp);
+  const park = z => {
+    line(`G1 X${fixed(BIN_X, 1)} Y${fixed(BIN_Y_ENTRY, 1)} F${int(v.f_travel)} ; toolhead behind the plate`);
+    line(`G1 Y${fixed(BIN_Y, 1)} F${int(v.f_travel)} ; over the purge bin`);
+    line(`G1 Z${fixed(z, 1)} F${zFast} ; plate up under the fans, the parts' tops ${g(v.margin)} mm under the nozzle`);
+  };
+  line(`; ==== ${MARK}: ${sweep ? 'cool, flex and sweep' : 'cool and flex only (test)'} ====`);
+  line(`; part height ${fixed(height, 1)} mm`);
+  line('M104 S0 ; nozzle off');
+  line('M140 S0 ; bed off');
+  line('G90');
+  park(up);
+  line('M106 S255 ; part fan');
+  line('M106 P2 S255 ; auxiliary fan onto the plate');
+  if (s.marlinWait) line(`M190 R${release} ; wait for the bed to cool to ${release} C`);
+  else line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
+  line('M107');
+  line('M106 P2 S0');
+  line("; --- flex: the plate's tab rests on the bender and the plate bends ---");
+  for (let i = 0; i < Math.trunc(v.bend_repeats); ++i) {
+    line(`G1 Z${g(v.bend_before_z)} F${zFast}`);
+    line(`G1 Z${g(v.bend_bottom_z)} F${zBend} ; the tab touches at Z ${g(v.bend_touch_z)}: flexes ${g(v.bend_bottom_z - v.bend_touch_z)} mm`);
+    line(`G4 P${int(v.bend_pause_ms)}`);
+    line(`G1 Z${g(v.bend_before_z)} F${zBend} ; the plate settles back on its magnets`);
+  }
+  if (!sweep) {
+    line(`; bend-only test: the bed stays at Z ${g(v.bend_before_z)}, no sweep, motors left on and homed`);
+    line(`; ==== end ${MARK} ====`);
+    return out.join('\n') + '\n';
+  }
+  const plan = sweepPlan(height, layout, s);
+  line(`; --- sweep: up to ${plan.passes.length} pass(es) top down x ${plan.columns.length} columns ---`);
+  for (const c of plan.columns) {
+    if (c.under > 0)
+      line(`; column at X ${fixed(c.x, 1)}: parts up to ${fixed(c.under, 1)} mm, the scoop starts at Y ${fixed(c.yStart - v.scoop_ahead, 1)}`);
+    else line(`; column at X ${fixed(c.x, 1)}: empty`);
+  }
+  // The bed comes up first, the toolhead still over the bin: the parts' tops stop just under the scoop. Only
+  // then does the toolhead cross the plate, and the bed makes the last short climb at each column.
+  line(`G1 Z${fixed(up, 1)} F${zFast} ; plate up first, the parts just under the scoop, toolhead over the bin`);
+  let zNow = up;
+  plan.passes.forEach((d, k) => {
+    const back = d + v.return_above_pass, last = k === plan.passes.length - 1;
+    const feed = int(last ? v.f_push : v.f_push_high);
+    let swept = 0;
+    // The last level runs last_pass_repeats times; a higher level sweeps a column only where the scoop
+    // reaches what stands under it.
+    for (let r = 0; r < (last ? Math.trunc(v.last_pass_repeats) : 1); ++r)
+      for (const c of plan.columns) {
+        if (!(c.under > 0) || (!last && c.under <= d + v.scoop_low)) continue;
+        if (!swept++)
+          line(`; pass ${k + 1}/${plan.passes.length}: plate ${fixed(d, 1)} mm under the nozzle, scoop ${fixed(d + v.scoop_low, 1)}-${fixed(d + v.scoop_high, 1)} mm, gantry at ${fixed(d + v.gantry_low, 1)} mm`);
+        const x = Math.min(Math.max(c.x - v.scoop_offset_x, X_MIN), X_MAX);
+        line(`G1 X${fixed(x, 1)} Y${fixed(c.yStart, 1)} F${int(v.f_travel)} ; column at X ${fixed(c.x, 1)}`);
+        line(`G1 Z${fixed(d, 1)} F${zFast}`);
+        line(`G1 Y${fixed(plan.yEnd, 1)} F${feed} ; push past the front edge`);
+        line(`G1 Z${fixed(back, 1)} F${zFast} ; bed down to return above the parts`);
+        zNow = back;
+      }
+  });
+  line('; --- last blow over the cleared plate ---');
+  if (zNow < up) line(`G1 Z${fixed(up, 1)} F${zFast}`);
+  park(up);
+  if (v.blow_ms > 0) {
+    line('M106 S255');
+    line('M106 P2 S255');
+    line(`G4 P${int(v.blow_ms)}`);
+    line('M107');
+    line('M106 P2 S0');
+  }
+  line('M84');
+  line(`; ==== end ${MARK} ====`);
+  return out.join('\n') + '\n';
+}
+
+// ---- reading the slicer's file ----
+const lineEnd = (text, at, limit) => { const n = text.indexOf('\n', at); return n < 0 || n >= limit ? limit : n + 1; };
+// A line in [from, limit) starting with `word` followed by a blank, a comment or its end.
+function findLine(text, from, limit, word, last) {
+  const re = new RegExp('^[ \\t]*' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[ \\t;\\r\\n]|$)', 'gm');
+  re.lastIndex = from;
+  let found = -1, m;
+  while ((m = re.exec(text)) && m.index + word.length <= limit) {
+    if (m.index >= limit) break;
+    found = m.index;
+    if (!last) return found;
+  }
+  return found;
+}
+// ELEGOO's purge line on the front edge ("G180 S7" ... "G180 S8"): the same amount, purged where the
+// filament load leaves the toolhead, over the bin. The M106 S0 after the line stays.
+function findPurge(text, body) {
+  const limit = Math.min(text.length, body + PURGE_SPAN);
+  const open = findLine(text, body, limit, 'G180 S7', false);
+  if (open < 0) return null;
+  const close = findLine(text, open + 1, limit, 'G180 S8', false);
+  if (close < 0) return null;
+  let end = close;
+  const fan = findLine(text, open, close, 'M106 S0', true);
+  if (fan >= 0) end = fan;
+  let extruded = 0, feed = 120, frontMove = false, drawn = false, haveFeed = false, kept = '';
+  for (let at = lineEnd(text, open, end); at < end; at = lineEnd(text, at, end)) {
+    let stop = at;
+    while (stop < end && text[stop] !== '\n' && text[stop] !== ';') stop++;
+    const t = text.slice(at, Math.min(stop, at + 159));
+    if (t.startsWith('M73 ') || t.startsWith('M109 ')) { kept += t + '\n'; continue; }
+    if (!t.startsWith('G1 ')) continue;
+    const e = t.indexOf('E'), y = t.indexOf('Y'), x = t.indexOf('X'), f = t.indexOf('F');
+    if (y >= 0 && e < 0) frontMove = true;
+    if (x >= 0 && e >= 0) drawn = true;
+    if (e >= 0) extruded += parseFloat(t.slice(e + 1)) || 0;
+    if (e >= 0 && x < 0 && y < 0 && f >= 0 && !haveFeed) { feed = parseFloat(t.slice(f + 1)); haveFeed = true; }
+  }
+  if (!frontMove || !drawn || !(extruded > 0) || extruded > 500 || !(feed > 0)) return null;
+  return {
+    start: open, end,
+    text: `; ${MARK}: the purge line goes into the bin, off the plate the scoop sweeps\n${kept}M83\nG92 E0 ;Reset Extruder\nM106 S200\nG1 E${fixed(extruded, 3)} F${g(feed)}\n`,
+  };
+}
+// The object labels: "EXCLUDE_OBJECT_DEFINE NAME=<name> ... POLYGON=[[x,y],...]"; any unreadable one
+// leaves the layout unknown (null).
+function parseLayout(text, limit) {
+  const objects = [], re = /^EXCLUDE_OBJECT_DEFINE[ \t][^\n]*/gm;
+  let m;
+  while ((m = re.exec(text)) && m.index < limit) {
+    const name = /\sNAME=([^\s]+)/.exec(m[0]), poly = /POLYGON=\[(.*)\]/.exec(m[0]);
+    if (!name || !poly || objects.length >= OBJECTS_MAX) return null;
+    const points = [...poly[1].matchAll(/\[([-0-9.eE+]+),([-0-9.eE+]+)\]/g)].map(p => [parseFloat(p[1]), parseFloat(p[2])]);
+    if (points.length < 3 || points.some(p => !p.every(Number.isFinite))) return null;
+    const xs = points.map(p => p[0]), ys = points.map(p => p[1]);
+    objects.push({ name: name[1], points, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), height: -1 });
+  }
+  return objects.length ? objects : null;
+}
+// Each part's height: the last layer (";Z:") in which it is printed.
+function layoutHeights(text, layout) {
+  if (!layout) return;
+  const byName = new Map(layout.map(o => [o.name, o]));
+  const re = /^(?:;Z:([^\n\r]*)|EXCLUDE_OBJECT_START NAME=([^\s]+))/gm;
+  let z = 0, m;
+  while ((m = re.exec(text))) {
+    if (m[1] !== undefined) z = parseFloat(m[1]) || 0;
+    else { const o = byName.get(m[2]); if (o && z > o.height) o.height = z; }
+  }
+}
+
+// Everything the page shows and the download needs, or { error }.
+function inspect(text) {
+  const startAt = text.indexOf('; EXECUTABLE_BLOCK_START');
+  if (startAt < 0 || startAt > 512 * 1024) return { error: 'The file has no executable block: not an OrcaSlicer or ElegooSlicer file' };
+  const body = lineEnd(text, startAt, text.length);
+  const blockEnd = text.lastIndexOf('; EXECUTABLE_BLOCK_END');
+  if (blockEnd < body) return { error: 'The file has no end of its executable block' };
+  const inBlock = text.slice(body, blockEnd);
+  if (inBlock.includes(MARK) || inBlock.includes(FARMLOOP_MARK)) return { error: 'The file already has a removal cycle' };
+  const model = /; printer_model = ([^\r\n]*)/.exec(text.slice(blockEnd));
+  if (model && !model[1].includes('Centauri Carbon 2')) return { error: 'The file was sliced for another printer (' + model[1] + ')' };
+  const endGcode = text.lastIndexOf('CC2_END_GCODE', blockEnd);
+  if (endGcode < body) return { error: 'The file has no ELEGOO end G-code (CC2_END_GCODE)' };
+  const m84 = findLine(text, endGcode, blockEnd, 'M84', true);
+  const cutStart = m84 >= 0 ? m84 : blockEnd, cutEnd = m84 >= 0 ? lineEnd(text, m84, blockEnd) : blockEnd;
+  let height = -1;
+  const top = /; max_z_height: ([^\r\n]*)/.exec(text.slice(0, 8192));
+  if (top) height = parseFloat(top[1]);
+  if (!(height > 0)) {
+    const z = text.lastIndexOf('\n;Z:', blockEnd);
+    if (z >= 0) height = parseFloat(text.slice(z + 4, lineEnd(text, z + 1, blockEnd)));
+  }
+  if (!(height > 0) || height > 1000) height = -1;
+  const layout = parseLayout(text, Math.min(text.length, 512 * 1024));
+  layoutHeights(text, layout);
+  let purge = findPurge(text, body);
+  if (purge && purge.end > cutStart) purge = null;
+  return { body, blockEnd, cutStart, cutEnd, height, layout, purge };
+}
+
+// The processed file: the block with the purge moved and the cycle in place of ELEGOO's M84, `copies` times.
+function build(text, info, s, copies) {
+  const sweep = !s.bendOnly;
+  const why = refusal(info.height, layoutBack(info.layout), s, sweep);
+  if (why) return { error: why };
+  const tail = cycle(info.height, info.layout, s, sweep);
+  let block = info.purge
+    ? text.slice(info.body, info.purge.start) + info.purge.text + text.slice(info.purge.end, info.cutStart)
+    : text.slice(info.body, info.cutStart);
+  block += tail + text.slice(info.cutEnd, info.blockEnd);
+  const n = sweep ? copies : 1;
+  return { text: text.slice(0, info.body) + block.repeat(n) + text.slice(info.blockEnd), cycle: tail, copies: n };
+}
+// CORE-END
+
+// ---- page ----
+const STORE = 'cc2-autoclear-settings';
+let settings = load(), source = null, info = null, fileName = '';
+
+function load() {
+  const s = defaults();
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE) || '{}');
+    for (const [key] of FIELDS) if (valueValid(key, saved.v?.[key])) s.v[key] = saved.v[key];
+    s.marlinWait = saved.marlinWait === true;
+  } catch {}
+  return s;
+}
+function save() {
+  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, marlinWait: settings.marlinWait })); } catch {}
+}
+const $ = id => document.getElementById(id);
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Settings the sliders own; the advanced section lists the rest.
+const SLIDER_KEYS = new Set(['first_pass_below_top', 'pass_step', 'last_pass_repeats', 'bend_touch_z', 'bend_bottom_z',
+  'bend_repeats', 'bend_pause_ms', 'release_bed_temp', 'blow_ms']);
+const EXAMPLE_HEIGHT = 60;
+
+function renderFields() {
+  const groups = $('groups');
+  groups.innerHTML = '';
+  for (const [group, title] of Object.entries(GROUPS)) {
+    const keys = FIELDS.filter(f => f[5] === group && !SLIDER_KEYS.has(f[0]));
+    if (!keys.length) continue;
+    const d = document.createElement('details');
+    d.innerHTML = `<summary>${title}</summary><div class="fields"></div>`;
+    const box = d.querySelector('.fields');
+    for (const [key, , min, max, whole, , label] of keys) {
+      const row = document.createElement('label');
+      row.className = 'field';
+      row.innerHTML = `<span>${esc(label)}</span><input type="number" min="${min}" max="${max}" step="${whole ? 1 : 'any'}" value="${settings.v[key]}">`;
+      const input = row.querySelector('input');
+      input.addEventListener('input', () => {
+        const value = Number(input.value);
+        const ok = input.value !== '' && valueValid(key, value);
+        input.classList.toggle('bad', !ok);
+        if (ok) { settings.v[key] = value; save(); update(); }
+      });
+      box.appendChild(row);
+    }
+    groups.appendChild(d);
+  }
+  $('bedWait').value = settings.marlinWait ? 'marlin' : 'klipper';
+}
+
+// One labelled slider. `model()` gives { min, max, step, value, text, why, off } for the current file and
+// settings; `set(value)` writes the setting.
+const sliders = [];
+function slider(box, label, model, set) {
+  const el = document.createElement('div');
+  el.className = 'slider';
+  el.innerHTML = `<div class="top"><b>${esc(label)}</b><output></output></div><input type="range"><div class="why"></div>`;
+  const range = el.querySelector('input');
+  range.setAttribute('aria-label', label);
+  range.addEventListener('input', () => {
+    set(Number(range.value));
+    save();
+    flashLevels();
+    update();
+  });
+  box.appendChild(el);
+  sliders.push(() => {
+    const m = model();
+    Object.assign(range, { min: m.min, max: m.max, step: m.step });
+    range.value = m.value;
+    range.disabled = !!m.off;
+    el.classList.toggle('off', !!m.off);
+    el.querySelector('output').textContent = m.text;
+    el.querySelector('.why').textContent = m.why || '';
+  });
+}
+
+// The part the sweep sliders are drawn for: the file's tallest part, or an example.
+const partHeight = () => (info && !info.error && info.height > 0 ? info.height : EXAMPLE_HEIGHT);
+// Sweep levels for these settings: the plate's distance under the nozzle at each one, top down.
+const levels = () => passesOf(partHeight(), settings);
+const mm = x => `${(Math.round(x * 10) / 10).toString()} mm`;
+
+// The first sweep: the scoop's bottom edge, in mm above the plate. It must reach the part, and the gantry
+// must still clear it.
+function firstRange() {
+  const h = partHeight(), v = settings.v;
+  const lo = Math.max(v.push_z + v.scoop_low + 3.5, h - v.gantry_low + v.scoop_low + 1);
+  return { lo: Math.ceil(lo * 2) / 2, hi: Math.floor((h - 1) * 2) / 2 };
+}
+// Number of levels for a step, and the step that gives a number of levels.
+function countFor(step) { return passesOf(partHeight(), { ...settings, v: { ...settings.v, pass_step: step } }).length; }
+function stepFor(count) {
+  const v = settings.v, span = partHeight() - v.first_pass_below_top - v.push_z;
+  let step = Math.min(span / (count - 1), stepMax());
+  while (step > STEP_MIN && countFor(step) < count) step *= 0.995;
+  return Math.floor(Math.max(step, STEP_MIN) * 100) / 100;
+}
+const stepMax = () => Math.min(settings.v.scoop_high - settings.v.scoop_low, settings.v.gantry_low - settings.v.scoop_low - 0.5);
+const STEP_MIN = 3.5;
+
+function buildSliders() {
+  const sw = $('sweepSliders'), bd = $('benderSliders'), run = $('runSliders');
+  slider(sw, 'First sweep height', () => {
+    const h = partHeight(), v = settings.v, r = firstRange(), value = h - v.first_pass_below_top + v.scoop_low;
+    if (r.lo > r.hi) return { min: 0, max: 1, step: 1, value: 0, text: 'at the plate', off: true,
+      why: `The part is ${mm(h)} tall: a single sweep at the plate is enough.` };
+    const d0 = value - v.scoop_low;
+    return { min: r.lo, max: r.hi, step: 0.5, value: Math.min(r.hi, Math.max(r.lo, value)), text: `${mm(value)} above the plate`,
+      why: `The scoop takes the top ${mm(h - value)} of the part; the gantry passes ${mm(d0 + v.gantry_low - h)} above it.` };
+  }, value => {
+    const v = settings.v;
+    v.first_pass_below_top = Math.min(150, Math.max(0, Math.round((partHeight() - (value - v.scoop_low)) * 100) / 100));
+  });
+  slider(sw, 'Height between sweeps', () => {
+    const n = levels().length;
+    return { min: STEP_MIN, max: stepMax(), step: 0.5, value: Math.min(stepMax(), Math.max(STEP_MIN, settings.v.pass_step)),
+      text: mm(settings.v.pass_step), off: n < 2, why: n < 2 ? '' : 'Smaller steps mean more sweeps; at most the scoop\'s own height.' };
+  }, value => { settings.v.pass_step = value; });
+  slider(sw, 'Number of sweeps in height', () => {
+    const lo = countFor(stepMax()), hi = countFor(STEP_MIN), n = levels().length;
+    return { min: lo, max: Math.max(hi, lo + 1), step: 1, value: n, text: `${n}`, off: hi <= lo,
+      why: hi <= lo ? '' : `From ${lo} to ${hi} for this part: changing it sets the height between sweeps.` };
+  }, value => { if (value >= 2) settings.v.pass_step = stepFor(value); });
+  slider(sw, 'Last sweep, at the plate, runs', () => ({ min: 1, max: 5, step: 1, value: settings.v.last_pass_repeats,
+    text: settings.v.last_pass_repeats === 1 ? 'once' : `${settings.v.last_pass_repeats} times`,
+    why: 'Repeat it if loose bits stay behind.' }), value => { settings.v.last_pass_repeats = value; });
+
+  slider(bd, 'The plate\'s tab touches the bender at', () => ({ min: 150, max: 250, step: 0.5, value: settings.v.bend_touch_z,
+    text: `Z ${settings.v.bend_touch_z}`, why: 'Jog the bed down from the screen and note the Z where the tab first touches.' }), value => {
+    const v = settings.v, flex = v.bend_bottom_z - v.bend_touch_z;
+    v.bend_touch_z = value;
+    v.bend_bottom_z = Math.min(258, value + flex);
+    if (v.bend_before_z >= value) v.bend_before_z = value - 5;
+  });
+  slider(bd, 'Flex', () => {
+    const v = settings.v;
+    return { min: 5, max: 258 - v.bend_touch_z, step: 0.5, value: v.bend_bottom_z - v.bend_touch_z, text: mm(v.bend_bottom_z - v.bend_touch_z),
+      why: `The bed goes down to Z ${v.bend_bottom_z} (the printer stops at 258).` };
+  }, value => { settings.v.bend_bottom_z = Math.min(258, settings.v.bend_touch_z + value); });
+  slider(bd, 'Times the plate is flexed', () => ({ min: 1, max: 6, step: 1, value: settings.v.bend_repeats,
+    text: `${settings.v.bend_repeats}` }), value => { settings.v.bend_repeats = value; });
+  slider(bd, 'Held flexed for', () => ({ min: 0, max: 10, step: 0.5, value: settings.v.bend_pause_ms / 1000,
+    text: `${settings.v.bend_pause_ms / 1000} s` }), value => { settings.v.bend_pause_ms = Math.round(value * 1000); });
+
+  slider(run, 'Bed cool enough to release at', () => ({ min: 20, max: 60, step: 1, value: settings.v.release_bed_temp,
+    text: `${settings.v.release_bed_temp} °C`, why: 'Lower releases better but waits longer.' }), value => { settings.v.release_bed_temp = value; });
+  slider(run, 'Final blow over the cleared plate', () => ({ min: 0, max: 60, step: 1, value: settings.v.blow_ms / 1000,
+    text: settings.v.blow_ms ? `${settings.v.blow_ms / 1000} s` : 'off' }), value => { settings.v.blow_ms = value * 1000; });
+}
+
+// The side view next to the sliders: the part, each sweep's scoop at its height and the gantry of the first one.
+function drawSide() {
+  const v = settings.v, h = partHeight(), passes = levels(), W = 280, H = 230, base = 205, left = 34;
+  const top = Math.max(h, passes[0] + v.gantry_low) + 12, k = (base - 14) / top, Y = z => base - z * k;
+  const out = [];
+  out.push(`<line x1="${left - 6}" y1="${base}" x2="${W - 8}" y2="${base}" stroke="var(--muted)" stroke-width="2"/>`);
+  for (let z = 0; z <= top; z += top > 120 ? 50 : 20)
+    out.push(`<text x="${left - 10}" y="${Y(z) + 3}" text-anchor="end" font-size="9" fill="var(--muted)">${z}</text><line x1="${left - 6}" y1="${Y(z)}" x2="${left - 2}" y2="${Y(z)}" stroke="var(--muted)"/>`);
+  out.push(`<rect x="150" y="${Y(h)}" width="80" height="${h * k}" rx="2" fill="var(--part)" fill-opacity=".75"/>`);
+  out.push(`<text x="190" y="${Math.min(Y(h) + 14, base - 4)}" text-anchor="middle" font-size="10" fill="#fff">${mm(h)}</text>`);
+  const g = Y(passes[0] + v.gantry_low);
+  out.push(`<rect x="${left}" y="${g - 6}" width="${W - left - 8}" height="6" fill="var(--head)" fill-opacity=".6"/><text x="${W - 10}" y="${g - 9}" text-anchor="end" font-size="9" fill="var(--muted)">gantry, 1st sweep</text>`);
+  passes.forEach((d, i) => {
+    const x = 120 - i * 12, y0 = Y(d + v.scoop_high), y1 = Y(d + v.scoop_low);
+    out.push(`<rect x="${x}" y="${y0}" width="10" height="${y1 - y0}" fill="var(--scoop)" fill-opacity=".45" stroke="var(--scoop)"/>`);
+    out.push(`<line x1="${x + 10}" y1="${y1}" x2="232" y2="${y1}" stroke="var(--scoop)" stroke-dasharray="3 2" opacity=".9"/>`);
+    out.push(`<text x="${x - 2}" y="${y1 + 3}" text-anchor="end" font-size="9" fill="var(--scoop)">${i + 1}</text>`);
+  });
+  out.push(`<text x="${W - 8}" y="${base + 16}" text-anchor="end" font-size="9" fill="var(--muted)">door →</text>`);
+  $('sideView').innerHTML = out.join('');
+}
+
+function setStatus(tone, text) { $('status').innerHTML = text ? `<div class="status ${tone}">${esc(text)}</div>` : ''; }
+
+function update() {
+  settings.bendOnly = $('bendOnly').checked;
+  $('copies').disabled = settings.bendOnly;
+  for (const refresh of sliders) refresh();
+  drawSide();
+  const fileHeight = info && !info.error && info.height > 0;
+  $('sweepFor').textContent = fileHeight ? `For this file's tallest part, ${mm(info.height)}.` : `Shown for an example ${EXAMPLE_HEIGHT} mm part until you drop a file.`;
+  const n = levels().length;
+  $('sweepNote').textContent = `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
+  const facts = $('facts');
+  facts.innerHTML = '';
+  $('download').disabled = $('showCycle').disabled = true;
+  drawPlate();
+  if (!source) { setStatus('', ''); return; }
+  if (info.error) { setStatus('bad', info.error); return; }
+  const add = t => { const li = document.createElement('li'); li.textContent = t; facts.appendChild(li); };
+  if (info.layout) add(`Parts: ${info.layout.map(o => `${o.name.replace(/\.stl_id_\d+_copy_\d+$/, '')} (${o.height > 0 ? o.height.toFixed(1) : '?'} mm)`).join(', ')}`);
+  else add('No object labels in the file (turn on "Label objects" in OrcaSlicer): every column is swept for the tallest part.');
+  add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');
+  const sweep = !settings.bendOnly, why = refusal(info.height, layoutBack(info.layout), settings, sweep);
+  if (why) { setStatus('bad', 'Cannot clear this plate: ' + why); return; }
+  if (sweep) {
+    const plan = sweepPlan(info.height, info.layout, settings), last = plan.passes.length - 1;
+    const pushes = plan.passes.reduce((n, d, k) => n + plan.columns.filter(c => c.under > 0 && (k === last || c.under > d + settings.v.scoop_low)).length
+      * (k === last ? settings.v.last_pass_repeats : 1), 0);
+    add(`${pushes} pushes in all, over ${plan.columns.filter(c => c.under > 0).length} of ${plan.columns.length} columns.`);
+  } else add('Flex-only test: no sweep, and only one copy.');
+  const copies = sweep ? Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1))) : 1;
+  setStatus('ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}.`);
+  $('download').disabled = $('showCycle').disabled = false;
+  $('cycle').textContent = cycle(info.height, info.layout, settings, sweep);
+}
+
+// ---- 3D viewer: plays the cycle's own G-code over the plate, the parts, the scoop and the gantry ----
+const view = { yaw: -0.62, pitch: 0.62, zoom: 1, mode: '3d', t: 0, playing: false, speed: 10, last: 0 };
+let film = null; // { segments, total, parts }
+
+const COOL_S = 4; // a bed cooling of many minutes shown as a few seconds
+// The moves of the cycle text as timed segments, each with the comment that explains it.
+function filmOf(text, height, layout) {
+  const segments = [];
+  let x = PLATE / 2, y = PLATE / 2, z = Math.min(Math.max(height + 5, 80), 255), t = 0, phase = 'End of the print';
+  for (const raw of text.split('\n')) {
+    const [code, comment = ''] = raw.split(';').map(s => s.trim());
+    if (!code && comment) {
+      if (/^-{3}|^pass|^====/.test(comment)) phase = comment.replace(/^-+\s*|\s*-+$|^=+\s*|\s*=+$/g, '');
+      continue;
+    }
+    if (/^(TEMPERATURE_WAIT|M190)/.test(code)) {
+      segments.push({ t0: t, t1: t + COOL_S, a: [x, y, z], b: [x, y, z], line: raw, phase: 'Cooling the bed with both fans', cool: true });
+      t += COOL_S;
+      continue;
+    }
+    const pause = /^G4 P(\d+)/.exec(code);
+    if (pause) {
+      const d = Number(pause[1]) / 1000;
+      segments.push({ t0: t, t1: t + d, a: [x, y, z], b: [x, y, z], line: raw, phase, fans: /blow/.test(phase) });
+      t += d;
+      continue;
+    }
+    if (!/^G1\b/.test(code)) continue;
+    const word = k => { const m = new RegExp(k + '(-?[0-9.]+)').exec(code); return m ? Number(m[1]) : null; };
+    const nx = word('X') ?? x, ny = word('Y') ?? y, nz = word('Z') ?? z, f = word('F') ?? 3000;
+    const dist = Math.hypot(nx - x, ny - y, nz - z), d = dist / (f / 60);
+    segments.push({ t0: t, t1: t + d, a: [x, y, z], b: [nx, ny, nz], line: raw, phase, push: /push past/.test(raw) });
+    t += d; x = nx; y = ny; z = nz;
+  }
+  const parts = (layout && layout.length ? layout : [{ name: 'part', points: [[60, 60], [196, 60], [196, 196], [60, 196]], x0: 60, x1: 196, y0: 60, y1: 196, height }])
+    .map(o => ({ ...o, h: o.height > 0 ? Math.min(o.height, height) : height }));
+  return { segments, total: t, parts, guess: !(layout && layout.length) };
+}
+
+// State at time t: toolhead position, segment, and how far each part was pushed.
+function stateAt(t) {
+  const v = settings.v, half = v.scoop_width / 2;
+  const shift = film.parts.map(() => ({ dy: 0, gone: false }));
+  let head = film.segments.length ? film.segments[0].a : [PLATE / 2, PLATE / 2, 80], seg = null;
+  for (const s of film.segments) {
+    if (s.t0 > t) break;
+    const k = s.t1 > s.t0 ? Math.min(1, (t - s.t0) / (s.t1 - s.t0)) : 1;
+    head = s.a.map((a, i) => a + (s.b[i] - a) * k);
+    seg = s;
+    if (!s.push) continue;
+    // The scoop's front face slides to the front at this height: what it meets in X and in height goes with it.
+    const z = s.a[2], front = head[1] - v.scoop_ahead, cx = head[0] + v.scoop_offset_x;
+    film.parts.forEach((p, i) => {
+      const st = shift[i];
+      if (st.gone || p.x1 <= cx - half || p.x0 >= cx + half || p.h <= z + v.scoop_low) return;
+      if (p.y1 + st.dy > front && s.a[1] - v.scoop_ahead >= p.y1 + st.dy - 0.01) st.dy = front - p.y1;
+      if (p.y1 + st.dy < -2) { // the moment the scoop's face passed Y -2 in this move
+        st.gone = true;
+        st.at = s.t0 + (s.t1 - s.t0) * Math.min(1, ((s.a[1] - v.scoop_ahead) + 2) / Math.max(1e-9, s.a[1] - s.b[1]));
+      }
+    });
+  }
+  return { head, seg, shift };
+}
+
+function camera(w, h) {
+  const presets = { top: [0, Math.PI / 2 - 0.0001], front: [0, 0.12], side: [-Math.PI / 2, 0.12] };
+  const [yaw, pitch] = view.mode === '3d' ? [view.yaw, view.pitch] : presets[view.mode];
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const scale = Math.min(w, h) / 360 * view.zoom, cx0 = 128, cy0 = 135, cz0 = 45;
+  return p => {
+    const dx = p[0] - cx0, dy = p[1] - cy0, dz = p[2] - cz0;
+    const x1 = dx * cy - dy * sy, y1 = dx * sy + dy * cy;
+    return [w / 2 + x1 * scale, h / 2 - (dz * cp + y1 * sp) * scale, -y1 * cp + dz * sp];
+  };
+}
+
+function box(x0, x1, y0, y1, z0, z1, color, alpha = 1) {
+  const c = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+  return [[c[4], c[5], c[6], c[7]], [c[0], c[1], c[5], c[4]], [c[1], c[2], c[6], c[5]], [c[2], c[3], c[7], c[6]], [c[3], c[0], c[4], c[7]], [c[3], c[2], c[1], c[0]]]
+    .map(pts => ({ pts, color, alpha }));
+}
+function prism(points, dy, h, color) {
+  const bottom = points.map(p => [p[0], p[1] + dy, 0]), top = points.map(p => [p[0], p[1] + dy, h]);
+  const faces = [{ pts: top, color, alpha: 1 }];
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    if (points[i][0] === points[j][0] && points[i][1] === points[j][1]) continue;
+    faces.push({ pts: [bottom[i], bottom[j], top[j], top[i]], color, alpha: 1 });
+  }
+  return faces;
+}
+const normal = pts => {
+  const [a, b, c] = pts, u = b.map((x, i) => x - a[i]), w = c.map((x, i) => x - a[i]);
+  const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
+  return n.map(x => x / l);
+};
+function shade(hex, k, alpha) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex) || [0, '88', '88', '88'];
+  const c = [1, 2, 3].map(i => Math.round(parseInt(m[i], 16) * k));
+  return `rgba(${c.join(',')},${alpha})`;
+}
+
+function render() {
+  const canvas = $('view'), dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const P = camera(w, h), v = settings.v, faces = [];
+  const state = film ? stateAt(view.t) : { head: [PLATE / 2, PLATE / 2, 80], seg: null, shift: [] };
+  const [hx, hy, hz0] = state.head, hz = Math.min(hz0, 150); // the bed far down: drawn at the top of the scene
+  // Plate, the strip the scoop cannot reach, the bin.
+  faces.push(...box(0, PLATE, 0, PLATE, -3, 0, css('--plate-top')));
+  const reach = Y_BACK - v.scoop_ahead;
+  faces.push({ pts: [[0, reach, 0.05], [PLATE, reach, 0.05], [PLATE, Y_BACK, 0.05], [0, Y_BACK, 0.05]], color: css('--bad'), alpha: 0.35, flat: true });
+  faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
+  // Paused: the parts go see-through and each sweep that reaches a part is a numbered ring around it, at the
+  // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
+  const showRings = !!film && !view.playing && !settings.bendOnly, rings = [];
+  if (showRings) {
+    const passes = passesOf(info.height, settings), last = passes.length - 1;
+    film.parts.forEach((p, i) => {
+      if (state.shift[i].gone) return;
+      passes.forEach((d, k) => {
+        const z = d + v.scoop_low;
+        if (k === last || p.h > z) rings.push({ pts: p.points.map(q => [q[0], q[1] + state.shift[i].dy, Math.min(z, p.h)]), n: k + 1 });
+      });
+    });
+  }
+  // Parts, pushed by the scoop.
+  if (film) film.parts.forEach((p, i) => {
+    const s = state.shift[i];
+    if (!s.gone) faces.push(...prism(p.points, s.dy, p.h, css('--part')).map(f => ({ ...f, alpha: showRings ? 0.28 : 1 })));
+    else if (view.t - s.at < 1.2) { // off the edge: drops into the bin below the door
+      const k = (view.t - s.at) / 1.2;
+      faces.push(...prism(p.points.map(q => [q[0], q[1] - k * 30, 0]), s.dy, p.h, css('--part')).map(f => ({ ...f, pts: f.pts.map(q => [q[0], q[1], q[2] - k * k * 120]), alpha: 1 - k })));
+    }
+  });
+  // Toolhead, scoop and gantry at the nozzle's height over the plate.
+  const sx = hx + v.scoop_offset_x, front = hy - v.scoop_ahead;
+  faces.push(...box(sx - v.scoop_width / 2, sx + v.scoop_width / 2, front, front + 3, hz + v.scoop_low, hz + v.scoop_high, css('--scoop')));
+  faces.push(...box(sx - v.scoop_width / 2, sx + v.scoop_width / 2, front + 3, hy - 6, hz + v.scoop_high - 3, hz + v.scoop_high, css('--scoop')));
+  faces.push(...box(hx - 20, hx + 20, hy - 6, hy + 26, hz + 4, hz + v.gantry_low + 18, css('--head')));
+  faces.push(...box(hx - 3, hx + 3, hy - 3, hy + 3, hz, hz + 4, css('--warn')));
+  faces.push(...box(-12, PLATE + 12, hy + 6, hy + 26, hz + v.gantry_low, hz + v.gantry_low + 22, css('--head'), 0.45));
+  // Painter's order, lit from above the front left.
+  const light = [-0.35, -0.55, 0.76];
+  const drawn = faces.map(f => {
+    const q = f.pts.map(P);
+    return { f, q, depth: q.reduce((s, p) => s + p[2], 0) / q.length };
+  }).sort((a, b) => a.depth - b.depth);
+  // Grid on the plate first.
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+  for (let i = 0; i <= PLATE; i += 32) for (const [a, b] of [[[i, 0, 0.02], [i, PLATE, 0.02]], [[0, i, 0.02], [PLATE, i, 0.02]]]) {
+    const pa = P(a), pb = P(b); ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+  }
+  for (const { f, q } of drawn) {
+    const n = normal(f.pts), lit = f.flat ? 1 : 0.55 + 0.45 * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+    ctx.beginPath();
+    q.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.closePath();
+    ctx.fillStyle = shade(f.color, lit, f.alpha);
+    ctx.fill();
+    ctx.strokeStyle = shade(f.color, lit * 0.7, f.alpha === 1 ? 0.9 : 0.5); ctx.lineWidth = 0.6; ctx.stroke();
+  }
+  ctx.lineWidth = 2; ctx.strokeStyle = css('--scoop'); ctx.fillStyle = css('--scoop'); ctx.font = '600 11px system-ui, sans-serif';
+  for (const r of rings) {
+    const q = r.pts.map(P);
+    ctx.beginPath();
+    q.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.closePath();
+    ctx.stroke();
+    const tag = q.reduce((a, b) => (b[0] < a[0] ? b : a)); // number at the ring's leftmost point
+    ctx.textAlign = 'right';
+    ctx.fillText(String(r.n), tag[0] - 4, tag[1] + 4);
+  }
+  // The path still to come, dotted, on the plane of the scoop's bottom edge.
+  if (film && !showRings) {
+    ctx.setLineDash([3, 4]); ctx.strokeStyle = css('--accent'); ctx.globalAlpha = 0.55; ctx.beginPath();
+    let started = false;
+    for (const s of film.segments) {
+      if (s.t1 < view.t || !s.push) continue;
+      const a = P([s.a[0] + v.scoop_offset_x, s.a[1] - v.scoop_ahead, Math.min(s.a[2], 150) + v.scoop_low]);
+      const b = P([s.b[0] + v.scoop_offset_x, s.b[1] - v.scoop_ahead, Math.min(s.b[2], 150) + v.scoop_low]);
+      ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); started = true;
+    }
+    if (started) ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+  // Door label at the front edge.
+  const door = P([PLATE / 2, -10, 0]);
+  ctx.fillStyle = css('--muted'); ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('door', door[0], door[1] + 10);
+  const seg = state.seg;
+  $('phase').textContent = !film ? 'Drop a file to see its cycle' : seg ? `${seg.phase}${hz0 > 150 ? ` · plate ${hz0.toFixed(0)} mm under the nozzle` : ''}` : 'End of the print';
+  $('gline').textContent = showRings && view.t === 0 ? 'Orange rings: where each sweep meets the parts (1 is the first). Press play to watch it.'
+    : seg ? seg.line : film && film.guess ? 'No object labels: a block stands in for the parts' : '';
+  const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  $('clock').textContent = film ? `${clock(view.t)} / ${clock(film.total)}` : '0:00 / 0:00';
+  $('scrub').value = film && film.total ? Math.round(view.t / film.total * 1000) : 0;
+}
+
+let levelsFlash = -1e9;
+// A slider moved: redraw the rings once its value has settled.
+function flashLevels() {
+  levelsFlash = performance.now();
+  clearTimeout(flashLevels.timer);
+  flashLevels.timer = setTimeout(render, 1600);
+}
+function tick(now) {
+  if (!view.playing) return;
+  const dt = view.last ? (now - view.last) / 1000 : 0;
+  view.last = now;
+  view.t = Math.min(film.total, view.t + dt * view.speed);
+  if (view.t >= film.total) setPlaying(false);
+  render();
+  if (view.playing) requestAnimationFrame(tick);
+}
+function setPlaying(on) {
+  view.playing = on && !!film;
+  view.last = 0;
+  $('play').textContent = view.playing ? '❚❚' : '▶';
+  $('play').setAttribute('aria-label', view.playing ? 'Pause' : 'Play');
+  if (view.playing) requestAnimationFrame(tick);
+}
+// Rebuilds the film from the current file and settings, keeping the time where it was.
+function drawPlate() {
+  film = null;
+  if (info && !info.error && info.height > 0) {
+    const text = cycle(info.height, info.layout, { ...settings, bendOnly: $('bendOnly').checked }, !$('bendOnly').checked);
+    if (text) film = filmOf(text, info.height, info.layout);
+  }
+  if (!film) setPlaying(false);
+  view.t = film ? Math.min(view.t, film.total) : 0;
+  render();
+}
+
+$('play').addEventListener('click', () => {
+  if (!film) return;
+  if (view.t >= film.total) view.t = 0;
+  setPlaying(!view.playing);
+});
+$('scrub').addEventListener('input', e => { if (film) { view.t = film.total * e.target.value / 1000; render(); } });
+$('speed').addEventListener('change', e => { view.speed = Number(e.target.value); });
+document.querySelectorAll('.views button').forEach(b => b.addEventListener('click', () => {
+  view.mode = b.dataset.view;
+  document.querySelectorAll('.views button').forEach(x => x.classList.toggle('on', x === b));
+  render();
+}));
+(() => {
+  const c = $('view');
+  let drag = null;
+  c.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; c.setPointerCapture(e.pointerId); });
+  c.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (view.mode !== '3d') { view.mode = '3d'; document.querySelectorAll('.views button').forEach(x => x.classList.toggle('on', x.dataset.view === '3d')); }
+    view.yaw -= (e.clientX - drag[0]) * 0.008;
+    view.pitch = Math.min(Math.PI / 2 - 0.01, Math.max(0.05, view.pitch + (e.clientY - drag[1]) * 0.008));
+    drag = [e.clientX, e.clientY];
+    render();
+  });
+  c.addEventListener('pointerup', () => { drag = null; });
+  c.addEventListener('wheel', e => { e.preventDefault(); view.zoom = Math.min(4, Math.max(0.5, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); render(); }, { passive: false });
+  window.addEventListener('resize', render);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+})();
+
+function open(file) {
+  fileName = file.name;
+  const size = file.size >= 1048576 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.ceil(file.size / 1024)} KB`;
+  $('fileName').textContent = `${file.name} · ${size}`;
+  setStatus('warn', 'Reading the file…');
+  const reader = new FileReader();
+  reader.onload = () => { source = reader.result; info = inspect(source); update(); };
+  reader.onerror = () => setStatus('bad', 'Cannot read the file');
+  reader.readAsText(file);
+}
+
+$('drop').addEventListener('click', () => $('file').click());
+$('drop').addEventListener('keydown', e => (e.key === 'Enter' || e.key === ' ') && $('file').click());
+$('file').addEventListener('change', e => e.target.files[0] && open(e.target.files[0]));
+for (const ev of ['dragenter', 'dragover']) $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); });
+for (const ev of ['dragleave', 'drop']) $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); });
+$('drop').addEventListener('drop', e => e.dataTransfer.files[0] && open(e.dataTransfer.files[0]));
+$('bendOnly').addEventListener('change', update);
+$('copies').addEventListener('input', update);
+$('bedWait').addEventListener('change', () => { settings.marlinWait = $('bedWait').value === 'marlin'; save(); update(); });
+$('reset').addEventListener('click', () => { settings = defaults(); save(); renderFields(); update(); });
+$('showCycle').addEventListener('click', () => { $('cycle').hidden = !$('cycle').hidden; });
+$('download').addEventListener('click', () => {
+  const copies = Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1)));
+  const result = build(source, info, settings, copies);
+  if (result.error) return setStatus('bad', 'Refused: ' + result.error);
+  const stem = fileName.replace(/\.[^.]*$/, '');
+  const suffix = settings.bendOnly ? '_flextest' : result.copies > 1 ? `_autoclear_x${result.copies}` : '_autoclear';
+  const url = URL.createObjectURL(new Blob([result.text], { type: 'text/plain' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: stem + suffix + '.gcode' });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+renderFields();
+buildSliders();
+update();
+</script>
+</body>
+</html>
