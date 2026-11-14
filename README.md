@@ -24,6 +24,10 @@ El archivo no sale de tu ordenador.
   pala no alcanza, o cuyos ajustes harían chocar el pórtico.
 - **Copias:** puede repetir la impresión N veces en un solo archivo; cada copia imprime, limpia y empieza la siguiente.
 - **Prueba de solo doblado:** enfría y dobla sin barrer, para probar el doblador.
+- **Solo el ciclo:** descarga un archivo aparte con únicamente el enfriado y la retirada de esa impresión, para
+  ponerlo en la cola justo detrás de ella. No hace home (al hacer home de Z la boquilla bajaría sobre las piezas):
+  hay que lanzarlo en cuanto termina la impresión, con los motores aún encendidos, así que el G-code de acabado
+  no debe llevar `M84`. Si la impresora ha perdido la posición, debería rechazar el primer movimiento.
 
 ## La página
 

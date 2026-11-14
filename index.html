@@ -165,6 +165,7 @@ details.advanced details { margin: 8px; }
       <p class="hint">Drag to turn the view, scroll to zoom. Times are the real ones from the feed rates; cooling is shortened to a few seconds.</p>
       <div class="row">
         <button id="download" class="primary" disabled>Download processed G-code</button>
+        <button id="clearOnly" disabled title="The cooling and removal cycle as its own file, to queue right after this print">Download only the clearing cycle</button>
         <button id="showCycle" disabled>Show the cycle</button>
       </div>
       <pre id="cycle" hidden></pre>
@@ -513,6 +514,29 @@ function build(text, info, s, copies) {
   const n = sweep ? copies : 1;
   return { text: text.slice(0, info.body) + block.repeat(n) + text.slice(info.blockEnd), cycle: tail, copies: n };
 }
+// The cycle alone, as its own file to queue right after the print it clears. It cannot home: homing Z
+// lowers the nozzle onto the plate, where the parts still are. So it relies on the print leaving the motors
+// on (an end G-code without M84) and starts while they still are; a printer that lost its position refuses
+// the first move and nothing moves.
+function clearOnly(info, s, name) {
+  const sweep = !s.bendOnly;
+  const why = refusal(info.height, layoutBack(info.layout), s, sweep);
+  if (why) return { error: why };
+  const up = info.height + s.v.margin;
+  const text = [
+    `; CC2 Auto Clear: the clearing cycle alone, for ${name}`,
+    '; Start it right after that print, while the motors are still on: it does not home, because homing Z',
+    '; would lower the nozzle onto the parts. Use an end G-code without M84.',
+    `; max_z_height: ${fixed(info.height, 2)}`,
+    '; EXECUTABLE_BLOCK_START',
+    'G90',
+    `G1 Z${fixed(up, 1)} F${int(s.v.f_z_fast)} ; the parts' tops ${g(s.v.margin)} mm under the nozzle before anything moves`,
+    cycle(info.height, info.layout, s, sweep).trimEnd(),
+    '; EXECUTABLE_BLOCK_END',
+    '',
+  ].join('\n');
+  return { text };
+}
 // CORE-END
 
 // ---- page ----
@@ -725,7 +749,7 @@ function update() {
   $('sweepNote').style.color = warn.length ? 'var(--warn)' : '';
   const facts = $('facts');
   facts.innerHTML = '';
-  $('download').disabled = $('showCycle').disabled = true;
+  $('download').disabled = $('showCycle').disabled = $('clearOnly').disabled = true;
   drawPlate();
   if (!source) { setStatus('', ''); return; }
   if (info.error) { setStatus('bad', info.error); return; }
@@ -743,7 +767,7 @@ function update() {
   } else add('Flex-only test: no sweep, and only one copy.');
   const copies = sweep ? Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1))) : 1;
   setStatus(warn.length ? 'warn' : 'ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}${warn.length ? ', with the warning under Sweeps' : ''}.`);
-  $('download').disabled = $('showCycle').disabled = false;
+  $('download').disabled = $('showCycle').disabled = $('clearOnly').disabled = false;
   $('cycle').textContent = cycle(info.height, info.layout, settings, sweep);
 }
 
@@ -1038,16 +1062,24 @@ $('copies').addEventListener('input', update);
 $('bedWait').addEventListener('change', () => { settings.marlinWait = $('bedWait').value === 'marlin'; save(); update(); });
 $('reset').addEventListener('click', () => { settings = defaults(); save(); renderFields(); update(); });
 $('showCycle').addEventListener('click', () => { $('cycle').hidden = !$('cycle').hidden; });
+function saveFile(text, name) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+$('clearOnly').addEventListener('click', () => {
+  const result = clearOnly(info, settings, fileName);
+  if (result.error) return setStatus('bad', 'Refused: ' + result.error);
+  saveFile(result.text, fileName.replace(/\.[^.]*$/, '') + (settings.bendOnly ? '_flextest_only' : '_clear_only') + '.gcode');
+});
 $('download').addEventListener('click', () => {
   const copies = Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1)));
   const result = build(source, info, settings, copies);
   if (result.error) return setStatus('bad', 'Refused: ' + result.error);
   const stem = fileName.replace(/\.[^.]*$/, '');
   const suffix = settings.bendOnly ? '_flextest' : result.copies > 1 ? `_autoclear_x${result.copies}` : '_autoclear';
-  const url = URL.createObjectURL(new Blob([result.text], { type: 'text/plain' }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: stem + suffix + '.gcode' });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  saveFile(result.text, stem + suffix + '.gcode');
 });
 
 renderFields();
