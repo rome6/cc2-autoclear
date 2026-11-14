@@ -179,6 +179,7 @@ const FARMLOOP_MARK = 'FarmLoop CC2';
 const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
 const BIN_X = 51, BIN_Y = 264, BIN_Y_ENTRY = 257; // ELEGOO's own flush position (printer_dsp.cfg)
 const BEHIND = 10; // a column's push starts with the scoop this far behind its parts
+const TOP_Z = 3; // the bed's highest point while the toolhead waits over the bin
 const PASSES_MAX = 16, COLUMNS_MAX = 16, OBJECTS_MAX = 64, PURGE_SPAN = 64 * 1024;
 
 const FIELDS = [
@@ -204,6 +205,7 @@ const FIELDS = [
   ['bend_repeats', 2, 0, 10, 1, 'bender', 'Times the plate is flexed'],
   ['bend_pause_ms', 1500, 0, 60000, 1, 'bender', 'Pause with the plate flexed (ms)'],
   ['release_bed_temp', 30, 15, 80, 1, 'speed', 'Bed cool enough to release (°C)'],
+  ['top_room', 30, 0, 120, 0, 'speed', 'Room above the nozzle over the bin, for the parts (mm)'],
   ['blow_ms', 15000, 0, 120000, 1, 'speed', 'Last blow over the cleared plate (ms)'],
   ['f_travel', 6000, 60, 30000, 1, 'speed', 'XY travel (mm/min)'],
   ['f_z_fast', 600, 60, 3000, 1, 'speed', 'Fast Z (mm/min)'],
@@ -255,6 +257,23 @@ function layoutBack(layout) {
   for (const o of layout || []) back = Math.max(back, o.y1);
   return back;
 }
+// Allowed, but worth knowing: gaps between sweeps taller than the scoop leave a band of the part that no
+// sweep touches, and if a part stays stuck the next, lower sweep can drive the gantry into it.
+function warnings(height, s) {
+  const v = s.v, passes = passesOf(height, s), out = [];
+  for (let k = 1; k < passes.length; k++) {
+    const gap = passes[k - 1] - passes[k];
+    if (gap >= v.gantry_low - v.scoop_low) {
+      out.push(`Sweeps ${k} and ${k + 1} are ${gap.toFixed(1)} mm apart: if a part does not come off at sweep ${k}, the gantry hits it at sweep ${k + 1}.`);
+      break;
+    }
+    if (gap > v.scoop_high - v.scoop_low) {
+      out.push(`Sweeps ${k} and ${k + 1} are ${gap.toFixed(1)} mm apart, more than the scoop is tall: a part that does not come off at once is not swept in between.`);
+      break;
+    }
+  }
+  return out;
+}
 function refusal(height, back, s, sweep) {
   const v = s.v;
   if (!(height > 0)) return 'The part height is unknown';
@@ -266,8 +285,6 @@ function refusal(height, back, s, sweep) {
   const passes = passesOf(height, s);
   if (height >= passes[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
   if (v.scoop_high <= v.scoop_low) return "The scoop's top edge must be above its bottom edge";
-  if (v.pass_step > v.scoop_high - v.scoop_low) return 'The step between sweeps is taller than the scoop';
-  if (v.pass_step >= v.gantry_low - v.scoop_low) return 'The step between sweeps would drive the gantry into what a sweep leaves behind';
   if (Y_BACK - v.scoop_ahead <= Y_FRONT) return 'The scoop has no travel in Y';
   if (back > Y_BACK - v.scoop_ahead) return 'A part stands at the back of the plate, behind where the scoop starts';
   if (v.scoop_width <= v.column_overlap) return 'The column overlap must be smaller than the scoop';
@@ -305,17 +322,20 @@ function cycle(height, layout, s, sweep) {
   if (refusal(height, layoutBack(layout), s, sweep)) return null;
   const v = s.v, out = [], line = t => out.push(t);
   const up = height + v.margin, zFast = int(v.f_z_fast), zBend = int(v.f_z_bend), release = int(v.release_bed_temp);
-  const park = z => {
+  // Over the bin nothing but the enclosure's top stands above the plate: the bed comes all the way up, or as
+  // far as the tallest part leaves top_room above the nozzle's height.
+  const cool = Math.max(TOP_Z, height - v.top_room);
+  const park = () => {
     line(`G1 X${fixed(BIN_X, 1)} Y${fixed(BIN_Y_ENTRY, 1)} F${int(v.f_travel)} ; toolhead behind the plate`);
     line(`G1 Y${fixed(BIN_Y, 1)} F${int(v.f_travel)} ; over the purge bin`);
-    line(`G1 Z${fixed(z, 1)} F${zFast} ; plate up under the fans, the parts' tops ${g(v.margin)} mm under the nozzle`);
+    line(`G1 Z${fixed(cool, 1)} F${zFast} ; plate ${cool === TOP_Z ? 'all the way' : 'as far as the parts allow'} up, under the fans`);
   };
   line(`; ==== ${MARK}: ${sweep ? 'cool, flex and sweep' : 'cool and flex only (test)'} ====`);
   line(`; part height ${fixed(height, 1)} mm`);
   line('M104 S0 ; nozzle off');
   line('M140 S0 ; bed off');
   line('G90');
-  park(up);
+  park();
   line('M106 S255 ; part fan');
   line('M106 P2 S255 ; auxiliary fan onto the plate');
   if (s.marlinWait) line(`M190 R${release} ; wait for the bed to cool to ${release} C`);
@@ -366,7 +386,7 @@ function cycle(height, layout, s, sweep) {
   });
   line('; --- last blow over the cleared plate ---');
   if (zNow < up) line(`G1 Z${fixed(up, 1)} F${zFast}`);
-  park(up);
+  park();
   if (v.blow_ms > 0) {
     line('M106 S255');
     line('M106 P2 S255');
@@ -516,7 +536,8 @@ const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 
 // Settings the sliders own; the advanced section lists the rest.
 const SLIDER_KEYS = new Set(['first_pass_below_top', 'pass_step', 'last_pass_repeats', 'bend_touch_z', 'bend_bottom_z',
-  'bend_repeats', 'bend_pause_ms', 'release_bed_temp', 'blow_ms']);
+  'bend_repeats', 'bend_pause_ms', 'release_bed_temp', 'blow_ms', 'top_room']);
+const ONLY_AT_PLATE = 150; // first_pass_below_top at its maximum: no sweep above the last one
 const EXAMPLE_HEIGHT = 60;
 
 function renderFields() {
@@ -590,12 +611,15 @@ function firstRange() {
 function countFor(step) { return passesOf(partHeight(), { ...settings, v: { ...settings.v, pass_step: step } }).length; }
 function stepFor(count) {
   const v = settings.v, span = partHeight() - v.first_pass_below_top - v.push_z;
-  let step = Math.min(span / (count - 1), stepMax());
+  let step = span / (count - 1);
   while (step > STEP_MIN && countFor(step) < count) step *= 0.995;
   return Math.floor(Math.max(step, STEP_MIN) * 100) / 100;
 }
-const stepMax = () => Math.min(settings.v.scoop_high - settings.v.scoop_low, settings.v.gantry_low - settings.v.scoop_low - 0.5);
+// The widest gap the slider offers: the whole height from the first sweep to the plate (two sweeps).
+const span = () => Math.max(STEP_MIN, partHeight() - settings.v.first_pass_below_top - settings.v.push_z);
 const STEP_MIN = 3.5;
+// One sweep alone, at the plate, only when the gantry still clears the part there.
+const oneSweepFits = () => partHeight() < settings.v.push_z + settings.v.gantry_low - 0.5;
 
 function buildSliders() {
   const sw = $('sweepSliders'), bd = $('benderSliders'), run = $('runSliders');
@@ -603,23 +627,33 @@ function buildSliders() {
     const h = partHeight(), v = settings.v, r = firstRange(), value = h - v.first_pass_below_top + v.scoop_low;
     if (r.lo > r.hi) return { min: 0, max: 1, step: 1, value: 0, text: 'at the plate', off: true,
       why: `The part is ${mm(h)} tall: a single sweep at the plate is enough.` };
+    if (levels().length === 1) return { min: r.lo, max: r.hi, step: 0.5, value: r.lo, text: 'only at the plate',
+      why: 'One sweep, at the plate. Move this to add sweeps higher up.' };
     const d0 = value - v.scoop_low;
     return { min: r.lo, max: r.hi, step: 0.5, value: Math.min(r.hi, Math.max(r.lo, value)), text: `${mm(value)} above the plate`,
       why: `The scoop takes the top ${mm(h - value)} of the part; the gantry passes ${mm(d0 + v.gantry_low - h)} above it.` };
   }, value => {
     const v = settings.v;
-    v.first_pass_below_top = Math.min(150, Math.max(0, Math.round((partHeight() - (value - v.scoop_low)) * 100) / 100));
+    v.first_pass_below_top = Math.min(ONLY_AT_PLATE - 1, Math.max(0, Math.round((partHeight() - (value - v.scoop_low)) * 100) / 100));
   });
   slider(sw, 'Height between sweeps', () => {
-    const n = levels().length;
-    return { min: STEP_MIN, max: stepMax(), step: 0.5, value: Math.min(stepMax(), Math.max(STEP_MIN, settings.v.pass_step)),
-      text: mm(settings.v.pass_step), off: n < 2, why: n < 2 ? '' : 'Smaller steps mean more sweeps; at most the scoop\'s own height.' };
+    const n = levels().length, max = Math.max(STEP_MIN + 0.5, Math.ceil(span() * 2) / 2);
+    return { min: STEP_MIN, max, step: 0.5, value: Math.min(max, Math.max(STEP_MIN, settings.v.pass_step)),
+      text: n < 2 ? '—' : mm(Math.min(settings.v.pass_step, span())), off: n < 2,
+      why: n < 2 ? '' : `Smaller steps mean more sweeps. Up to ${mm(settings.v.scoop_high - settings.v.scoop_low)} (the scoop's height) every height gets swept.` };
   }, value => { settings.v.pass_step = value; });
   slider(sw, 'Number of sweeps in height', () => {
-    const lo = countFor(stepMax()), hi = countFor(STEP_MIN), n = levels().length;
-    return { min: lo, max: Math.max(hi, lo + 1), step: 1, value: n, text: `${n}`, off: hi <= lo,
-      why: hi <= lo ? '' : `From ${lo} to ${hi} for this part: changing it sets the height between sweeps.` };
-  }, value => { if (value >= 2) settings.v.pass_step = stepFor(value); });
+    const lo = oneSweepFits() ? 1 : 2, hi = Math.max(lo + 1, countFor(STEP_MIN)), n = levels().length;
+    return { min: lo, max: hi, step: 1, value: n, text: `${n}`,
+      why: `From ${lo} to ${hi} for this part: it sets the height between sweeps.${lo === 2 ? ' One alone would put the gantry into the part.' : ''}` };
+  }, value => {
+    const v = settings.v;
+    if (value === 1) { v.first_pass_below_top = ONLY_AT_PLATE; return; }
+    if (v.first_pass_below_top >= ONLY_AT_PLATE - 1 || levels().length < 2) v.first_pass_below_top = 28; // back from "only at the plate"
+    const r = firstRange(), first = partHeight() - v.first_pass_below_top + v.scoop_low;
+    if (r.lo <= r.hi && (first < r.lo || first > r.hi)) v.first_pass_below_top = partHeight() - (Math.min(r.hi, Math.max(r.lo, first)) - v.scoop_low);
+    v.pass_step = stepFor(value);
+  });
   slider(sw, 'Last sweep, at the plate, runs', () => ({ min: 1, max: 5, step: 1, value: settings.v.last_pass_repeats,
     text: settings.v.last_pass_repeats === 1 ? 'once' : `${settings.v.last_pass_repeats} times`,
     why: 'Repeat it if loose bits stay behind.' }), value => { settings.v.last_pass_repeats = value; });
@@ -643,6 +677,13 @@ function buildSliders() {
 
   slider(run, 'Bed cool enough to release at', () => ({ min: 20, max: 60, step: 1, value: settings.v.release_bed_temp,
     text: `${settings.v.release_bed_temp} °C`, why: 'Lower releases better but waits longer.' }), value => { settings.v.release_bed_temp = value; });
+  slider(run, 'Bed raised over the bin, for cooling and the blow', () => {
+    const v = settings.v, h = partHeight(), z = Math.max(TOP_Z, h - v.top_room);
+    return { min: 0, max: 120, step: 1, value: v.top_room, text: z === TOP_Z ? 'all the way up' : `Z ${z.toFixed(0)}`,
+      why: `Room you allow above the nozzle's height for the parts: ${mm(v.top_room)}. ${z === TOP_Z
+        ? `This ${mm(h)} part fits: the plate goes up to Z ${TOP_Z}.`
+        : `This ${mm(h)} part needs more: the plate stops at Z ${z.toFixed(1)}.`} Check the space under the enclosure's top before raising it.` };
+  }, value => { settings.v.top_room = value; });
   slider(run, 'Final blow over the cleared plate', () => ({ min: 0, max: 60, step: 1, value: settings.v.blow_ms / 1000,
     text: settings.v.blow_ms ? `${settings.v.blow_ms / 1000} s` : 'off' }), value => { settings.v.blow_ms = value * 1000; });
 }
@@ -678,8 +719,10 @@ function update() {
   drawSide();
   const fileHeight = info && !info.error && info.height > 0;
   $('sweepFor').textContent = fileHeight ? `For this file's tallest part, ${mm(info.height)}.` : `Shown for an example ${EXAMPLE_HEIGHT} mm part until you drop a file.`;
-  const n = levels().length;
-  $('sweepNote').textContent = `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
+  const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings);
+  $('sweepNote').textContent = warn.length ? warn.join(' ')
+    : `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
+  $('sweepNote').style.color = warn.length ? 'var(--warn)' : '';
   const facts = $('facts');
   facts.innerHTML = '';
   $('download').disabled = $('showCycle').disabled = true;
@@ -699,7 +742,7 @@ function update() {
     add(`${pushes} pushes in all, over ${plan.columns.filter(c => c.under > 0).length} of ${plan.columns.length} columns.`);
   } else add('Flex-only test: no sweep, and only one copy.');
   const copies = sweep ? Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1))) : 1;
-  setStatus('ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}.`);
+  setStatus(warn.length ? 'warn' : 'ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}${warn.length ? ', with the warning under Sweeps' : ''}.`);
   $('download').disabled = $('showCycle').disabled = false;
   $('cycle').textContent = cycle(info.height, info.layout, settings, sweep);
 }
