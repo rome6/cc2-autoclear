@@ -34,6 +34,10 @@ El archivo no sale de tu ordenador.
 - Deslizadores para la altura de la primera pasada, la separación y el número de pasadas (enlazados),
   el doblador y el enfriado. Se puede bajar a 2 pasadas (o 1 si el pórtico pasa por encima de la pieza a ras de
   placa); si la separación deja al pórtico sin margen ante una pieza que no se suelte, lo avisa en naranja.
+- La pieza más alta la marca el doblador: antes de doblar, la cama baja rápido hasta 10 mm antes del punto de
+  contacto de la pestaña, y la pieza tiene que caber ahí bajo la boquilla con el margen.
+- Velocidades por perfiles (lento, conservador, rápido), uno para los movimientos que no empujan y otro para los
+  que empujan. Las medidas de la pala y del pórtico son fijas.
 - Vista lateral de las pasadas y un visor 3D que reproduce el G-code real del ciclo: con la animación parada,
   cada pasada es un anillo numerado alrededor de la pieza a la altura donde la golpea la pala.
 

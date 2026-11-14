@@ -67,6 +67,12 @@ h2.step { margin-top: 20px; }
 .slider .why { color: var(--muted); font-size: 12px; }
 .slider.off { opacity: .5; }
 details.advanced { margin-top: 16px; }
+.speeds { display: grid; gap: 12px; }
+.speeds .why { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; margin-top: 6px; }
+.seg button { border: 0; border-radius: 0; padding: 6px 14px; background: var(--panel); }
+.seg button + button { border-left: 1px solid var(--edge); }
+.seg button.on { background: var(--accent); color: #fff; }
 details.advanced > summary { color: var(--muted); }
 details.advanced details { margin: 8px; }
 .viewer { position: relative; border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; background: var(--stage); }
@@ -120,16 +126,15 @@ details.advanced details { margin: 8px; }
         <input type="number" id="copies" min="1" max="20" step="1" value="1">
         <span class="hint">each copy prints, clears the bed and starts the next</span>
       </div>
-      <div class="row">
-        <span>Bed cool-down wait</span>
-        <select id="bedWait">
-          <option value="klipper">TEMPERATURE_WAIT</option>
-          <option value="marlin">M190 R</option>
-        </select>
+
+      <h2 class="step">5. Speeds</h2>
+      <div class="speeds">
+        <div><b>Moves that push nothing</b><div class="seg" data-speed="travel"></div><div class="why" id="travelWhy"></div></div>
+        <div><b>Pushing the parts</b><div class="seg" data-speed="push"></div><div class="why" id="pushWhy"></div></div>
       </div>
 
       <details class="advanced">
-        <summary>Advanced: scoop and gantry measurements, speeds</summary>
+        <summary>Advanced</summary>
         <div id="groups"></div>
       </details>
       <div class="row">
@@ -181,6 +186,14 @@ const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
 const BIN_X = 51, BIN_Y = 264, BIN_Y_ENTRY = 257; // ELEGOO's own flush position (printer_dsp.cfg)
 const BEHIND = 10; // a column's push starts with the scoop this far behind its parts
 const TOP_Z = 3; // the bed's highest point while the toolhead waits over the bin
+const BEND_APPROACH = 10; // the bed comes down fast to this far above the bender's touch point
+// Speed profiles, mm/min: moves that push nothing (XY travel, Z, Z while flexing) and the pushes themselves
+// (the last sweep at the plate, and the higher ones).
+const SPEEDS = {
+  travel: { slow: { f_travel: 3000, f_z_fast: 300, f_z_bend: 180 }, normal: { f_travel: 6000, f_z_fast: 600, f_z_bend: 300 },
+            fast: { f_travel: 12000, f_z_fast: 900, f_z_bend: 450 } },
+  push: { slow: { f_push: 900, f_push_high: 600 }, normal: { f_push: 1500, f_push_high: 900 }, fast: { f_push: 3000, f_push_high: 1800 } },
+};
 const PASSES_MAX = 16, COLUMNS_MAX = 16, OBJECTS_MAX = 64, PURGE_SPAN = 64 * 1024;
 
 const FIELDS = [
@@ -198,7 +211,6 @@ const FIELDS = [
   ['first_pass_below_top', 28, 0, 150, 0, 'sweep', 'First sweep: plate at part height minus (mm)'],
   ['pass_step', 25, 1, 150, 0, 'sweep', 'Step between sweeps (mm)'],
   ['return_above_pass', 40, 1, 255, 0, 'sweep', 'Bed drop to return between columns (mm)'],
-  ['max_part_height', 180, 1, 255, 0, 'sweep', 'Tallest part allowed (mm)'],
   ['margin', 5, 0, 50, 0, 'sweep', 'Margin above the tallest part (mm)'],
   ['bend_touch_z', 206, 0, 258, 0, 'bender', 'Z where the tab touches the bender'],
   ['bend_bottom_z', 255, 0, 258, 0, 'bender', 'Z of the bed fully down'],
@@ -219,7 +231,13 @@ const GROUPS = { scoop: 'Scoop', sweep: 'Sweeps', bender: 'Bender', speed: 'Temp
 function defaults() {
   const v = {};
   for (const [key, value] of FIELDS) v[key] = value;
-  return { v, marlinWait: false, bendOnly: false };
+  v.bend_before_z = v.bend_touch_z - BEND_APPROACH;
+  return { v, bendOnly: false, travel: 'normal', push: 'normal' };
+}
+// The feed rates of a speed profile into the settings.
+function applySpeeds(s) {
+  Object.assign(s.v, SPEEDS.travel[s.travel] || SPEEDS.travel.normal, SPEEDS.push[s.push] || SPEEDS.push.normal);
+  return s;
 }
 function valueValid(key, value) {
   const f = FIELDS.find(x => x[0] === key);
@@ -278,8 +296,8 @@ function warnings(height, s) {
 function refusal(height, back, s, sweep) {
   const v = s.v;
   if (!(height > 0)) return 'The part height is unknown';
-  if (height > v.max_part_height) return 'The part is taller than the maximum part height';
-  if (height + v.margin > v.bend_before_z) return 'The part does not fit under the toolhead while the plate is flexed';
+  if (height + v.margin > v.bend_before_z)
+    return `The part is too tall for the bender: up to ${fixed(v.bend_before_z - v.margin, 1)} mm fits under the nozzle with the bed at Z ${g(v.bend_before_z)}, where the flexing starts`;
   if (!(v.bend_before_z < v.bend_touch_z && v.bend_touch_z < v.bend_bottom_z))
     return 'The bender heights must rise from the fast move to the touch point to the bottom';
   if (!sweep) return null;
@@ -339,8 +357,7 @@ function cycle(height, layout, s, sweep) {
   park();
   line('M106 S255 ; part fan');
   line('M106 P2 S255 ; auxiliary fan onto the plate');
-  if (s.marlinWait) line(`M190 R${release} ; wait for the bed to cool to ${release} C`);
-  else line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
+  line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
   line('M107');
   line('M106 P2 S0');
   line("; --- flex: the plate's tab rests on the bender and the plate bends ---");
@@ -543,17 +560,23 @@ function clearOnly(info, s, name) {
 const STORE = 'cc2-autoclear-settings';
 let settings = load(), source = null, info = null, fileName = '';
 
+// The scoop and the gantry are the printer's and the mount's own: always the defaults. The bed's fast
+// approach follows the bender's touch point, and the feed rates follow the speed profiles.
+const FIXED_KEYS = new Set(FIELDS.filter(f => f[5] === 'scoop').map(f => f[0]).concat(['bend_before_z',
+  'f_travel', 'f_z_fast', 'f_z_bend', 'f_push', 'f_push_high']));
 function load() {
   const s = defaults();
   try {
     const saved = JSON.parse(localStorage.getItem(STORE) || '{}');
-    for (const [key] of FIELDS) if (valueValid(key, saved.v?.[key])) s.v[key] = saved.v[key];
-    s.marlinWait = saved.marlinWait === true;
+    for (const [key] of FIELDS) if (!FIXED_KEYS.has(key) && valueValid(key, saved.v?.[key])) s.v[key] = saved.v[key];
+    if (SPEEDS.travel[saved.travel]) s.travel = saved.travel;
+    if (SPEEDS.push[saved.push]) s.push = saved.push;
   } catch {}
-  return s;
+  s.v.bend_before_z = s.v.bend_touch_z - BEND_APPROACH;
+  return applySpeeds(s);
 }
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, marlinWait: settings.marlinWait })); } catch {}
+  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push })); } catch {}
 }
 const $ = id => document.getElementById(id);
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -568,7 +591,7 @@ function renderFields() {
   const groups = $('groups');
   groups.innerHTML = '';
   for (const [group, title] of Object.entries(GROUPS)) {
-    const keys = FIELDS.filter(f => f[5] === group && !SLIDER_KEYS.has(f[0]));
+    const keys = FIELDS.filter(f => f[5] === group && !SLIDER_KEYS.has(f[0]) && !FIXED_KEYS.has(f[0]));
     if (!keys.length) continue;
     const d = document.createElement('details');
     d.innerHTML = `<summary>${title}</summary><div class="fields"></div>`;
@@ -588,7 +611,6 @@ function renderFields() {
     }
     groups.appendChild(d);
   }
-  $('bedWait').value = settings.marlinWait ? 'marlin' : 'klipper';
 }
 
 // One labelled slider. `model()` gives { min, max, step, value, text, why, off } for the current file and
@@ -683,11 +705,13 @@ function buildSliders() {
     why: 'Repeat it if loose bits stay behind.' }), value => { settings.v.last_pass_repeats = value; });
 
   slider(bd, 'The plate\'s tab touches the bender at', () => ({ min: 150, max: 250, step: 0.5, value: settings.v.bend_touch_z,
-    text: `Z ${settings.v.bend_touch_z}`, why: 'Jog the bed down from the screen and note the Z where the tab first touches.' }), value => {
+    text: `Z ${settings.v.bend_touch_z}`, why: `Jog the bed down from the screen and note the Z where the tab first touches. `
+      + `The bed comes down fast to Z ${settings.v.bend_touch_z - BEND_APPROACH} first, so parts up to `
+      + `${mm(settings.v.bend_touch_z - BEND_APPROACH - settings.v.margin)} fit (with the ${mm(settings.v.margin)} margin).` }), value => {
     const v = settings.v, flex = v.bend_bottom_z - v.bend_touch_z;
     v.bend_touch_z = value;
     v.bend_bottom_z = Math.min(258, value + flex);
-    if (v.bend_before_z >= value) v.bend_before_z = value - 5;
+    v.bend_before_z = value - BEND_APPROACH;
   });
   slider(bd, 'Flex', () => {
     const v = settings.v;
@@ -1059,8 +1083,7 @@ for (const ev of ['dragleave', 'drop']) $('drop').addEventListener(ev, e => { e.
 $('drop').addEventListener('drop', e => e.dataTransfer.files[0] && open(e.dataTransfer.files[0]));
 $('bendOnly').addEventListener('change', update);
 $('copies').addEventListener('input', update);
-$('bedWait').addEventListener('change', () => { settings.marlinWait = $('bedWait').value === 'marlin'; save(); update(); });
-$('reset').addEventListener('click', () => { settings = defaults(); save(); renderFields(); update(); });
+$('reset').addEventListener('click', () => { settings = applySpeeds(defaults()); save(); renderFields(); update(); });
 $('showCycle').addEventListener('click', () => { $('cycle').hidden = !$('cycle').hidden; });
 function saveFile(text, name) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
@@ -1082,8 +1105,24 @@ $('download').addEventListener('click', () => {
   saveFile(result.text, stem + suffix + '.gcode');
 });
 
+const PROFILE_NAMES = { slow: 'Slow', normal: 'Conservative', fast: 'Fast' };
+function renderSpeeds() {
+  for (const box of document.querySelectorAll('.seg')) {
+    const kind = box.dataset.speed;
+    box.innerHTML = Object.entries(PROFILE_NAMES).map(([id, name]) =>
+      `<button data-id="${id}" class="${settings[kind] === id ? 'on' : ''}">${name}</button>`).join('');
+    box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      settings[kind] = b.dataset.id;
+      applySpeeds(settings); save(); renderSpeeds(); update();
+    }));
+  }
+  const t = SPEEDS.travel[settings.travel], p = SPEEDS.push[settings.push], mms = f => `${Math.round(f / 60)} mm/s`;
+  $('travelWhy').textContent = `Toolhead ${mms(t.f_travel)}, bed ${mms(t.f_z_fast)}, bed while flexing ${mms(t.f_z_bend)}.`;
+  $('pushWhy').textContent = `Sweeps at the plate ${mms(p.f_push)}, higher sweeps ${mms(p.f_push_high)} (they push from the part's top, so slower).`;
+}
 renderFields();
 buildSliders();
+renderSpeeds();
 update();
 </script>
 </body>
