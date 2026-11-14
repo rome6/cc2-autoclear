@@ -218,6 +218,7 @@ const FIELDS = [
   ['bend_repeats', 2, 0, 10, 1, 'bender', 'Times the plate is flexed'],
   ['bend_pause_ms', 1500, 0, 60000, 1, 'bender', 'Pause with the plate flexed (ms)'],
   ['release_bed_temp', 30, 15, 80, 1, 'speed', 'Bed cool enough to release (°C)'],
+  ['cool_min_s', 300, 0, 3600, 1, 'speed', 'Cool the bed at least (s)'],
   ['top_room', 30, 0, 120, 0, 'speed', 'Room above the nozzle over the bin, for the parts (mm)'],
   ['blow_ms', 15000, 0, 120000, 1, 'speed', 'Last blow over the cleared plate (ms)'],
   ['f_travel', 6000, 60, 30000, 1, 'speed', 'XY travel (mm/min)'],
@@ -358,6 +359,8 @@ function cycle(height, layout, s, sweep) {
   line('M106 S255 ; part fan');
   line('M106 P2 S255 ; auxiliary fan onto the plate');
   line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
+  // The CC2's firmware has been seen to run straight past TEMPERATURE_WAIT: a fixed time always holds.
+  if (v.cool_min_s > 0) line(`G4 P${int(v.cool_min_s * 1000)} ; cool at least ${g(v.cool_min_s / 60)} min, even if the wait above is skipped`);
   line('M107');
   line('M106 P2 S0');
   line("; --- flex: the plate's tab rests on the bender and the plate bends ---");
@@ -583,7 +586,7 @@ const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 
 // Settings the sliders own; the advanced section lists the rest.
 const SLIDER_KEYS = new Set(['first_pass_below_top', 'pass_step', 'last_pass_repeats', 'bend_touch_z', 'bend_bottom_z',
-  'bend_repeats', 'bend_pause_ms', 'release_bed_temp', 'blow_ms', 'top_room']);
+  'bend_repeats', 'bend_pause_ms', 'release_bed_temp', 'cool_min_s', 'blow_ms', 'top_room']);
 const ONLY_AT_PLATE = 150; // first_pass_below_top at its maximum: no sweep above the last one
 const EXAMPLE_HEIGHT = 60;
 
@@ -725,6 +728,9 @@ function buildSliders() {
 
   slider(run, 'Bed cool enough to release at', () => ({ min: 20, max: 60, step: 1, value: settings.v.release_bed_temp,
     text: `${settings.v.release_bed_temp} °C`, why: 'Lower releases better but waits longer.' }), value => { settings.v.release_bed_temp = value; });
+  slider(run, 'Cool the bed for at least', () => ({ min: 0, max: 30, step: 1, value: settings.v.cool_min_s / 60,
+    text: settings.v.cool_min_s ? `${settings.v.cool_min_s / 60} min` : 'off',
+    why: 'A fixed wait with both fans on. The CC2 can skip the temperature wait, so keep this on.' }), value => { settings.v.cool_min_s = value * 60; });
   slider(run, 'Bed raised over the bin, for cooling and the blow', () => {
     const v = settings.v, h = partHeight(), z = Math.max(TOP_Z, h - v.top_room);
     return { min: 0, max: 120, step: 1, value: v.top_room, text: z === TOP_Z ? 'all the way up' : `Z ${z.toFixed(0)}`,
@@ -816,6 +822,7 @@ function filmOf(text, height, layout) {
       continue;
     }
     const pause = /^G4 P(\d+)/.exec(code);
+    if (pause && /cool at least/.test(comment)) continue; // shown as part of the cooling above
     if (pause) {
       const d = Number(pause[1]) / 1000;
       segments.push({ t0: t, t1: t + d, a: [x, y, z], b: [x, y, z], line: raw, phase, fans: /blow/.test(phase) });
