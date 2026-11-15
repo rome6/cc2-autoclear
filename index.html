@@ -1115,7 +1115,7 @@ function render() {
   const reach = Y_BACK - v.scoop_ahead;
   faces.push({ pts: [[0, reach, 0.05], [PLATE, reach, 0.05], [PLATE, Y_BACK, 0.05], [0, Y_BACK, 0.05]], color: css('--bad'), alpha: 0.35, flat: true });
   faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
-  // Paused: the parts go see-through and each sweep that reaches a part is a numbered ring around it, at the
+  // Paused: the parts go see-through and each sweep that reaches a part is a ring around it, at the
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
   const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !settings.custom), rings = [];
   if (showRings) {
@@ -1192,55 +1192,59 @@ function render() {
     ctx.fill();
     ctx.strokeStyle = shade(f.color, lit * 0.7, f.alpha === 1 ? 0.9 : 0.5); ctx.lineWidth = 0.6; ctx.stroke();
   }
-  ctx.lineWidth = 2; ctx.strokeStyle = css('--scoop'); ctx.fillStyle = css('--scoop'); ctx.font = '600 11px system-ui, sans-serif';
+  ctx.lineWidth = 2; ctx.strokeStyle = css('--scoop');
   for (const r of rings) {
     const q = r.pts.map(P);
+    ctx.globalAlpha = view.focus < 0 || !settings.custom || r.n === view.focus + 1 ? 1 : 0.2;
     ctx.beginPath();
     q.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.closePath();
     ctx.stroke();
-    const tag = q.reduce((a, b) => (b[0] < a[0] ? b : a)); // number at the ring's leftmost point
-    ctx.textAlign = 'right';
-    ctx.fillText(String(r.n), tag[0] - 4, tag[1] + 4);
   }
-  // Paused: one arrow on the plate per position pushed, from where the scoop's face starts to past the front
-  // edge, labelled with the pushes that run there; red where one is refused. The push being edited stands out
-  // with the scoop's width.
+  ctx.globalAlpha = 1;
+  // Paused: an arrow for every push, at the height of the scoop's bottom edge, from where its face starts to
+  // past the front edge, with a dashed drop to the plate; red where refused.
+  // The push being edited stands out with the scoop's width.
   if (showRings) {
-    const arrows = [];
-    if (settings.custom) {
-      const at = new Map();
-      for (const q of customPlan(info.height, info.layout, settings).pushes) {
-        const key = q.x.toFixed(1);
-        if (!at.has(key)) at.set(key, { x: q.x, y0: -1e9, steps: [], bad: false });
-        const a = at.get(key);
-        a.y0 = Math.max(a.y0, q.yStart - v.scoop_ahead);
-        if (!a.steps.includes(q.step + 1)) a.steps.push(q.step + 1);
-        a.bad = a.bad || q.hits;
-      }
-      arrows.push(...at.values());
-    } else {
-      const plan = sweepPlan(info.height, info.layout, settings);
-      for (const c of plan.columns) if (c.under > 0) arrows.push({ x: c.x, y0: c.yStart - v.scoop_ahead, steps: [] });
+    const at = new Map(), arrow = (x, y0, z, n, bad) => {
+      const key = `${x.toFixed(1)}:${z.toFixed(1)}`;
+      if (!at.has(key)) at.set(key, { x, y0: -1e9, z, steps: [], bad: false });
+      const a = at.get(key);
+      a.y0 = Math.max(a.y0, y0);
+      if (!a.steps.includes(n)) a.steps.push(n);
+      a.bad = a.bad || bad;
+    };
+    if (settings.custom)
+      for (const q of customPlan(info.height, info.layout, settings).pushes) arrow(q.x, q.yStart - v.scoop_ahead, q.d + v.scoop_low, q.step + 1, q.hits);
+    else {
+      const plan = sweepPlan(info.height, info.layout, settings), last = plan.passes.length - 1;
+      plan.passes.forEach((d, k) => {
+        for (const c of plan.columns)
+          if (c.under > 0 && (k === last || c.under > d + v.scoop_low)) arrow(c.x, c.yStart - v.scoop_ahead, d + v.scoop_low, k + 1, false);
+      });
     }
-    const y1 = -v.past_edge, accent = css('--scoop'), bad = css('--bad');
-    ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'center';
-    for (const a of arrows) {
-      const on = view.focus < 0 || a.steps.includes(view.focus + 1);
-      ctx.globalAlpha = on ? 1 : 0.25;
-      if (on && view.focus >= 0) { // the scoop's width along the push
-        const band = [[a.x - v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, y1], [a.x - v.scoop_width / 2, y1]].map(q => P([q[0], q[1], 0.2]));
-        ctx.fillStyle = shade(accent, 1, 0.16); ctx.beginPath();
+    const y1 = -v.past_edge, accent = css('--scoop'), bad = css('--bad'), focused = view.focus >= 0 && settings.custom;
+    for (const a of at.values()) {
+      const on = !focused || a.steps.includes(view.focus + 1), color = a.bad ? bad : accent;
+      ctx.globalAlpha = on ? 1 : 0.2;
+      if (on && focused) { // the scoop's width along the push
+        const band = [[a.x - v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, y1], [a.x - v.scoop_width / 2, y1]].map(q => P([q[0], q[1], a.z]));
+        ctx.fillStyle = shade(color, 1, 0.18); ctx.beginPath();
         band.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.fill();
       }
-      const s = P([a.x, a.y0, 0.3]), e = P([a.x, y1, 0.3]), ang = Math.atan2(e[1] - s[1], e[0] - s[0]);
-      ctx.strokeStyle = ctx.fillStyle = a.bad ? bad : accent; ctx.lineWidth = on && view.focus >= 0 ? 3 : 2;
+      const s = P([a.x, a.y0, a.z]), e = P([a.x, y1, a.z]), ang = Math.atan2(e[1] - s[1], e[0] - s[0]);
+      ctx.strokeStyle = ctx.fillStyle = color;
+      ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      for (const [px, py] of [[a.x, a.y0], [a.x, y1]]) {
+        const top = P([px, py, a.z]), foot = P([px, py, 0]);
+        ctx.beginPath(); ctx.moveTo(top[0], top[1]); ctx.lineTo(foot[0], foot[1]); ctx.stroke();
+      }
+      ctx.setLineDash([]); ctx.lineWidth = on && focused ? 3 : 2;
       ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(e[0], e[1]); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(e[0], e[1]);
       ctx.lineTo(e[0] - 10 * Math.cos(ang - 0.45), e[1] - 10 * Math.sin(ang - 0.45));
       ctx.lineTo(e[0] - 10 * Math.cos(ang + 0.45), e[1] - 10 * Math.sin(ang + 0.45)); ctx.closePath(); ctx.fill();
       ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, 2 * Math.PI); ctx.fill();
-      if (a.steps.length) ctx.fillText(a.steps.join('·'), s[0], s[1] - 7);
     }
     ctx.globalAlpha = 1;
   }
@@ -1263,7 +1267,7 @@ function render() {
   ctx.fillText('door', door[0], door[1] + 10);
   const seg = state.seg;
   $('phase').textContent = !film ? 'Drop a file to see its cycle' : film.still ? 'This plan is refused: the message on the left says why (red arrows)' : seg ? `${seg.phase}${hz0 > 150 ? ` · plate ${hz0.toFixed(0)} mm under the nozzle` : ''}` : 'End of the print';
-  $('gline').textContent = showRings && view.t === 0 ? `Arrows: where each ${settings.custom ? 'push' : 'column'} pushes; rings: where each ${settings.custom ? 'push' : 'sweep'} meets the parts. Press play to watch it.`
+  $('gline').textContent = showRings && view.t === 0 ? `Arrows: where and at what height it pushes; rings: where the scoop meets the parts.${settings.custom ? ' Touch a push to pick it out.' : ''} Press play to watch it.`
     : seg ? seg.line : film && film.guess ? 'No object labels: a block stands in for the parts' : '';
   const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   $('clock').textContent = film ? `${clock(view.t)} / ${clock(film.total)}` : '0:00 / 0:00';
