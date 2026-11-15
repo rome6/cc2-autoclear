@@ -216,6 +216,16 @@ const BIN_X = 51, BIN_Y = 264, BIN_Y_ENTRY = 257; // ELEGOO's own flush position
 const BEHIND = 10; // a column's push starts with the scoop this far behind its parts
 const TOP_Z = 3; // the bed's highest point while the toolhead waits over the bin
 const BEND_APPROACH = 10; // the bed comes down fast to this far above the bender's touch point
+// The CC2 ignores TEMPERATURE_WAIT and its M190 only waits upwards, so the cooling is a timed G4. Measured on
+// a CC2 with the plate raised under both fans, the bed follows room + (start - room)·e^(-t/τ): from 70 °C it
+// read 52 °C after 2 min, 41 after 4, 34 after 6 and 30 after 8.
+const COOL_ROOM = 22, COOL_TAU_S = 264;
+const BED_UNKNOWN = 70; // a file whose bed temperature can't be read cools as from a hot PETG bed
+// Seconds for the bed to cool from `bed` to `release` °C, rounded up to 10 s.
+function coolSeconds(bed, release) {
+  if (!(bed > release)) return 0;
+  return Math.ceil(COOL_TAU_S * Math.log((bed - COOL_ROOM) / Math.max(release - COOL_ROOM, 2)) / 10) * 10;
+}
 // Speed profiles, mm/min: moves that push nothing (XY travel, Z, Z while flexing) and the pushes themselves
 // (the last sweep at the plate, and the higher ones).
 const SPEEDS = {
@@ -247,7 +257,7 @@ const FIELDS = [
   ['bend_repeats', 2, 0, 10, 1, 'bender', 'Times the plate is flexed'],
   ['bend_pause_ms', 1500, 0, 60000, 1, 'bender', 'Pause with the plate flexed (ms)'],
   ['release_bed_temp', 30, 15, 80, 1, 'speed', 'Bed cool enough to release (°C)'],
-  ['cool_min_s', 300, 0, 3600, 1, 'speed', 'Cool the bed at least (s)'],
+  ['cool_min_s', 0, 0, 3600, 1, 'speed', 'Cool the bed at least (s)'],
   ['top_room', 30, 0, 120, 0, 'speed', 'Room above the nozzle over the bin, for the parts (mm)'],
   ['blow_ms', 15000, 0, 120000, 1, 'speed', 'Last blow over the cleared plate (ms)'],
   ['f_travel', 6000, 60, 30000, 1, 'speed', 'XY travel (mm/min)'],
@@ -438,7 +448,8 @@ function centreAt(o, z) {
 }
 const WHERE_TEXT = { parts: 'where it reaches parts', centre: "at the centre of each part's layer", plate: 'whole plate', x: 'one position' };
 
-function cycle(height, layout, s, sweep) {
+// `bed` is the print's bed temperature, °C: the cooling time follows it.
+function cycle(height, layout, s, sweep, bed) {
   if (refusal(height, layoutBack(layout), s, sweep, layout)) return null;
   const v = s.v, out = [], line = t => out.push(t);
   const up = height + v.margin, zFast = int(v.f_z_fast), zBend = int(v.f_z_bend), release = int(v.release_bed_temp);
@@ -472,8 +483,9 @@ function cycle(height, layout, s, sweep) {
   line('M106 S255 ; part fan');
   line('M106 P2 S255 ; auxiliary fan onto the plate');
   line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
-  // The CC2's firmware has been seen to run straight past TEMPERATURE_WAIT: a fixed time always holds.
-  if (v.cool_min_s > 0) line(`G4 P${int(v.cool_min_s * 1000)} ; cool at least ${g(v.cool_min_s / 60)} min, even if the wait above is skipped`);
+  // The CC2's firmware runs straight past TEMPERATURE_WAIT: the timed wait is the one that holds.
+  const from = bed > 0 ? bed : BED_UNKNOWN, coolS = Math.max(v.cool_min_s, coolSeconds(from, release));
+  if (coolS > 0) line(`G4 P${int(coolS * 1000)} ; cool ${Math.floor(coolS / 60)} min${coolS % 60 ? ` ${coolS % 60} s` : ''}: the bed from ${g(from)} to ${release} C, as the CC2's TEMPERATURE_WAIT is skipped`);
   line('M107');
   line('M106 P2 S0');
   line("; --- flex: the plate's tab rests on the bender and the plate bends ---");
@@ -614,6 +626,18 @@ function layoutHeights(text, layout) {
   }
 }
 
+// The bed temperature the print ends with: its last M140/M190 above 0 before the cut, or 0 if it has none.
+function bedTemp(text, from, to) {
+  for (let at = to; at > from;) {
+    const k = Math.max(text.lastIndexOf('\nM140 S', at - 1), text.lastIndexOf('\nM190 S', at - 1));
+    if (k < from) break;
+    const t = parseFloat(text.slice(k + 7, k + 14));
+    if (t > 0) return t;
+    at = k;
+  }
+  return 0;
+}
+
 // Everything the page shows and the download needs, or { error }.
 function inspect(text) {
   const startAt = text.indexOf('; EXECUTABLE_BLOCK_START');
@@ -641,7 +665,7 @@ function inspect(text) {
   layoutHeights(text, layout);
   let purge = findPurge(text, body);
   if (purge && purge.end > cutStart) purge = null;
-  return { body, blockEnd, cutStart, cutEnd, height, layout, purge };
+  return { body, blockEnd, cutStart, cutEnd, height, layout, purge, bed: bedTemp(text, body, cutStart) };
 }
 
 // The processed file: the block with the purge moved and the cycle in place of ELEGOO's M84, `copies` times.
@@ -649,7 +673,7 @@ function build(text, info, s, copies) {
   const sweep = !s.bendOnly;
   const why = refusal(info.height, layoutBack(info.layout), s, sweep, info.layout);
   if (why) return { error: why };
-  const tail = cycle(info.height, info.layout, s, sweep);
+  const tail = cycle(info.height, info.layout, s, sweep, info.bed);
   let block = info.purge
     ? text.slice(info.body, info.purge.start) + info.purge.text + text.slice(info.purge.end, info.cutStart)
     : text.slice(info.body, info.cutStart);
@@ -674,7 +698,7 @@ function clearOnly(info, s, name) {
     '; EXECUTABLE_BLOCK_START',
     'G90',
     `G1 Z${fixed(up, 1)} F${int(s.v.f_z_fast)} ; the parts' tops ${g(s.v.margin)} mm under the nozzle before anything moves`,
-    cycle(info.height, info.layout, s, sweep).trimEnd(),
+    cycle(info.height, info.layout, s, sweep, info.bed).trimEnd(),
     '; EXECUTABLE_BLOCK_END',
     '',
   ].join('\n');
@@ -684,6 +708,7 @@ function clearOnly(info, s, name) {
 
 // ---- page ----
 const STORE = 'cc2-autoclear-settings';
+const minutes = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')} min`;
 
 // The scoop and the gantry are the printer's and the mount's own: always the defaults. The bed's fast
 // approach follows the bender's touch point, and the feed rates follow the speed profiles.
@@ -851,11 +876,14 @@ function buildSliders() {
   slider(bd, 'Held flexed for', () => ({ min: 0, max: 10, step: 0.5, value: settings.v.bend_pause_ms / 1000,
     text: `${settings.v.bend_pause_ms / 1000} s` }), value => { settings.v.bend_pause_ms = Math.round(value * 1000); });
 
-  slider(run, 'Bed cool enough to release at', () => ({ min: 20, max: 60, step: 1, value: settings.v.release_bed_temp,
-    text: `${settings.v.release_bed_temp} °C`, why: 'Lower releases better but waits longer.' }), value => { settings.v.release_bed_temp = value; });
+  slider(run, 'Bed cool enough to release at', () => {
+    const bed = info && info.bed > 0 ? info.bed : BED_UNKNOWN, t = coolSeconds(bed, settings.v.release_bed_temp);
+    return { min: 20, max: 60, step: 1, value: settings.v.release_bed_temp, text: `${settings.v.release_bed_temp} °C`,
+      why: `From ${g(bed)} °C${info && info.bed > 0 ? ', this print\'s bed,' : ''} the bed takes about ${minutes(t)} with both fans: the wait follows it. Lower releases better but waits longer.` };
+  }, value => { settings.v.release_bed_temp = value; });
   slider(run, 'Cool the bed for at least', () => ({ min: 0, max: 30, step: 1, value: settings.v.cool_min_s / 60,
     text: settings.v.cool_min_s ? `${settings.v.cool_min_s / 60} min` : 'off',
-    why: 'A fixed wait with both fans on. The CC2 can skip the temperature wait, so keep this on.' }), value => { settings.v.cool_min_s = value * 60; });
+    why: 'A floor under the wait above, for a warm room or a thick plate.' }), value => { settings.v.cool_min_s = value * 60; });
   slider(run, 'Bed raised over the bin, for cooling and the blow', () => {
     const v = settings.v, h = partHeight(), z = Math.max(TOP_Z, h - v.top_room);
     return { min: 0, max: 120, step: 1, value: v.top_room, text: z === TOP_Z ? 'all the way up' : `Z ${z.toFixed(0)}`,
@@ -930,7 +958,7 @@ function update() {
   const copies = sweep ? Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1))) : 1;
   setStatus(warn.length ? 'warn' : 'ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}${warn.length ? ', with the warning under Sweeps' : ''}.`);
   $('download').disabled = $('showCycle').disabled = $('clearOnly').disabled = false;
-  $('cycle').textContent = cycle(info.height, info.layout, settings, sweep);
+  $('cycle').textContent = cycle(info.height, info.layout, settings, sweep, info.bed);
 }
 
 // ---- 3D viewer: plays the cycle's own G-code over the plate, the parts, the scoop and the gantry ----
@@ -1032,7 +1060,7 @@ function filmOf(text, height, layout, walls) {
       continue;
     }
     const pause = /^G4 P(\d+)/.exec(code);
-    if (pause && /cool at least/.test(comment)) continue; // shown as part of the cooling above
+    if (pause && /^cool /.test(comment)) continue; // shown as part of the cooling above
     if (pause) {
       const d = Number(pause[1]) / 1000;
       segments.push({ t0: t, t1: t + d, a: [x, y, z], b: [x, y, z], line: raw, phase, fans: /blow/.test(phase) });
@@ -1333,7 +1361,7 @@ function setPlaying(on) {
 function drawPlate() {
   film = null;
   if (info && !info.error && info.height > 0) {
-    const text = cycle(info.height, info.layout, { ...settings, bendOnly: $('bendOnly').checked }, !$('bendOnly').checked);
+    const text = cycle(info.height, info.layout, { ...settings, bendOnly: $('bendOnly').checked }, !$('bendOnly').checked, info.bed);
     // A refused plan still shows the parts and its arrows, standing still.
     film = filmOf(text || '', info.height, info.layout, info.walls);
     film.still = !text;

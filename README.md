@@ -14,8 +14,9 @@ El archivo no sale de tu ordenador.
 - **Final:** cambia el `M84` del final de ELEGOO por el ciclo:
   1. aparca el cabezal sobre el cubilete (X 51, Y 264), sube la cama arriba del todo (Z 3), o hasta donde deje
      el espacio libre que indiques por encima de la boquilla si la pieza es alta, y enfría con el ventilador de
-     capa y el auxiliar (`M106 P2`) hasta la temperatura de despegue, y como mínimo el tiempo que indiques
-     (el firmware de la CC2 se ha saltado `TEMPERATURE_WAIT` en una prueba);
+     capa y el auxiliar (`M106 P2`) hasta la temperatura de despegue. El firmware de la CC2 ignora `TEMPERATURE_WAIT`
+     y su `M190` solo espera calentando, así que la espera es un `G4` calculado con la temperatura de cama de la
+     impresión: medido en una CC2, de 70 °C baja a 40 °C en unos 4 min y a 30 °C en unos 8. Se puede poner un mínimo;
   2. dobla la placa contra el doblador (baja la cama, la mantiene y repite);
   3. barre de arriba abajo por columnas. Primero sube la cama con el cabezal aún sobre el cubilete,
      luego el cabezal cruza a su columna y la cama hace el último tramo. Cada columna solo recibe las pasadas
@@ -48,6 +49,7 @@ El archivo no sale de tu ordenador.
   retirada; solo rechaza un empuje cuyo pórtico chocaría con una pieza que ningún empuje anterior ha tocado. 
 - **Prueba de espera de temperatura:** descarga un G-code que no mueve nada; calienta la cama a 45 °C y la deja
   enfriar probando `TEMPERATURE_WAIT` y `M190`, para ver en el log de la impresora cuál espera de verdad.
+  Resultado en una CC2: `TEMPERATURE_WAIT` se ignora siempre y `M190` solo espera al calentar.
 - Velocidades por perfiles (lento, conservador, rápido), uno para los movimientos que no empujan y otro para los
   que empujan. Las medidas de la pala y del pórtico son fijas.
 - Vista lateral de las pasadas y un visor 3D que reproduce el G-code real del ciclo. Las piezas se dibujan con su
