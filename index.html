@@ -395,15 +395,15 @@ function customPlan(height, layout, s) {
     columnHeights(height, layout, s, xs).forEach((c, i) => {
       const x = xs[i], key = x.toFixed(1);
       if (st.where === 'parts' && !(c.under > 0 && (c.under > st.h || d <= v.push_z + 3))) return;
-      const above = swept.get(key);
-      if (above === undefined && c.under >= d + v.gantry_low)
+      const above = swept.get(key), hits = above === undefined && c.under >= d + v.gantry_low;
+      if (hits)
         error ??= `Push ${k + 1} at X ${fixed(x, 1)}: the gantry would hit the ${fixed(c.under, 1)} mm part. Add a higher push there first`;
       else if (above !== undefined && above >= d + v.gantry_low && !warn.length)
         warn.push(`Push ${k + 1} at X ${fixed(x, 1)} is ${fixed(above - st.h, 1)} mm under the one above it: if the part does not come off there, the gantry hits it.`);
       swept.set(key, Math.min(above ?? Infinity, st.h));
       const from = c.under > 0 ? c.back + BEHIND + v.scoop_ahead : Y_BACK;
       for (let r = 0; r < st.n; r++)
-        pushes.push({ step: k, x, d, feed: SPEEDS.push[st.speed].f_push, yStart: Math.max(Math.min(from, Y_BACK), yEnd) });
+        pushes.push({ step: k, x, d, feed: SPEEDS.push[st.speed].f_push, yStart: Math.max(Math.min(from, Y_BACK), yEnd), hits });
     });
   });
   if (!s.steps.length) error = 'Add at least one push';
@@ -906,12 +906,90 @@ function update() {
 }
 
 // ---- 3D viewer: plays the cycle's own G-code over the plate, the parts, the scoop and the gantry ----
-const view = { yaw: -0.62, pitch: 0.62, zoom: 1, mode: '3d', t: 0, playing: false, speed: 10, last: 0 };
+const view = { yaw: -0.62, pitch: 0.62, zoom: 1, mode: '3d', t: 0, playing: false, speed: 10, last: 0, focus: -1 };
 let film = null; // { segments, total, parts }
 
 const COOL_S = 4; // a bed cooling of many minutes shown as a few seconds
 // The moves of the cycle text as timed segments, each with the comment that explains it.
-function filmOf(text, height, layout) {
+// The printed shape: each part's outer walls, layer by layer, as polylines in plate coordinates (arcs
+// flattened, points closer than 0.8 mm merged), keyed by the object label ('part' without labels). Thinned
+// to every k-th layer, keeping the top one, when there are more points than a frame can draw.
+const WALL_TYPES = /^;TYPE:(Outer wall|Overhang wall)\b/, WALL_POINTS_MAX = 60000;
+const WALL_WORDS = Object.fromEntries(['X', 'Y', 'E', 'I', 'J'].map(k => [k, new RegExp(' ' + k + '(-?[0-9.]+)')]));
+function wallsOf(text) {
+  const byName = new Map();
+  let name = 'part', z = 0, wall = false, x = 0, y = 0, e = 0, relative = true, path = null, total = 0;
+  const end = () => {
+    if (path && path.length >= 4) {
+      if (!byName.has(name)) byName.set(name, new Map());
+      const layers = byName.get(name);
+      if (!layers.has(z)) layers.set(z, []);
+      layers.get(z).push(path);
+      total += path.length / 2;
+    }
+    path = null;
+  };
+  const add = (nx, ny) => {
+    if (!path) path = [x, y];
+    const n = path.length;
+    if (Math.hypot(nx - path[n - 2], ny - path[n - 1]) >= 0.8) path.push(nx, ny);
+  };
+  let at = 0;
+  while (at < text.length) {
+    let stop = text.indexOf('\n', at);
+    if (stop < 0) stop = text.length;
+    const line = text.slice(at, stop);
+    at = stop + 1;
+    const c = line[0];
+    if (c === ';') {
+      if (line.startsWith(';Z:')) { end(); z = parseFloat(line.slice(3)) || 0; }
+      else if (line.startsWith(';TYPE:')) { end(); wall = WALL_TYPES.test(line); }
+      continue;
+    }
+    if (c === 'E') {
+      if (line.startsWith('EXCLUDE_OBJECT_START')) { end(); name = (/NAME=(\S+)/.exec(line) || [, 'part'])[1]; }
+      else if (line.startsWith('EXCLUDE_OBJECT_END')) { end(); name = 'part'; }
+      continue;
+    }
+    if (c === 'M') {
+      if (line.startsWith('M83')) relative = true;
+      else if (line.startsWith('M82')) relative = false;
+      continue;
+    }
+    if (c !== 'G') continue;
+    const g = line[1] === '0' || line[1] === '1' ? 1 : line[1] === '2' || line[1] === '3' ? Number(line[1]) : 0;
+    if (!g || (line[2] !== ' ' && line[2] !== undefined)) { if (line.startsWith('G92')) e = 0; continue; }
+    const code = line.split(';')[0], word = k => { const m = WALL_WORDS[k].exec(code); return m ? Number(m[1]) : null; };
+    const nx = word('X') ?? x, ny = word('Y') ?? y, ne = word('E');
+    const extruding = ne !== null && (relative ? ne > 0 : ne > e);
+    if (ne !== null && !relative) e = ne;
+    if (!wall || !extruding) { end(); x = nx; y = ny; continue; }
+    if (g === 1) add(nx, ny);
+    else { // G2 clockwise, G3 counter-clockwise, about the centre at I/J from the start
+      const cx = x + (word('I') ?? 0), cy = y + (word('J') ?? 0), r = Math.hypot(x - cx, y - cy);
+      let a0 = Math.atan2(y - cy, x - cx), a1 = Math.atan2(ny - cy, nx - cx);
+      if (g === 2 && a1 >= a0) a1 -= 2 * Math.PI;
+      if (g === 3 && a1 <= a0) a1 += 2 * Math.PI;
+      const n = Math.max(1, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 12)));
+      for (let i = 1; i <= n; i++) add(cx + r * Math.cos(a0 + (a1 - a0) * i / n), cy + r * Math.sin(a0 + (a1 - a0) * i / n));
+    }
+    x = nx; y = ny;
+  }
+  end();
+  const stride = Math.max(1, Math.ceil(total / WALL_POINTS_MAX)), out = new Map();
+  for (const [part, layers] of byName) {
+    const zs = [...layers.keys()].sort((a, b) => a - b);
+    out.set(part, zs.filter((_, i) => i % stride === 0 || i === zs.length - 1).map(zl => {
+      const paths = layers.get(zl);
+      let sx = 0, sy = 0, n = 0;
+      for (const q of paths) for (let i = 0; i < q.length; i += 2) { sx += q[i]; sy += q[i + 1]; n++; }
+      return { z: zl, paths, cx: sx / n, cy: sy / n };
+    }));
+  }
+  return out;
+}
+
+function filmOf(text, height, layout, walls) {
   const segments = [];
   let x = PLATE / 2, y = PLATE / 2, z = Math.min(Math.max(height + 5, 80), 255), t = 0, phase = 'End of the print';
   for (const raw of text.split('\n')) {
@@ -940,9 +1018,20 @@ function filmOf(text, height, layout) {
     segments.push({ t0: t, t1: t + d, a: [x, y, z], b: [nx, ny, nz], line: raw, phase, push: /push past/.test(raw) });
     t += d; x = nx; y = ny; z = nz;
   }
-  const parts = (layout && layout.length ? layout : [{ name: 'part', points: [[60, 60], [196, 60], [196, 196], [60, 196]], x0: 60, x1: 196, y0: 60, y1: 196, height }])
-    .map(o => ({ ...o, h: o.height > 0 ? Math.min(o.height, height) : height }));
-  return { segments, total: t, parts, guess: !(layout && layout.length) };
+  // Without labels the walls of the whole plate stand in for one part, its box taken from them.
+  let guess = !(layout && layout.length), base = layout;
+  const whole = walls && walls.get('part');
+  if (guess && whole && whole.length) {
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const l of whole) for (const q of l.paths) for (let i = 0; i < q.length; i += 2) {
+      x0 = Math.min(x0, q[i]); x1 = Math.max(x1, q[i]); y0 = Math.min(y0, q[i + 1]); y1 = Math.max(y1, q[i + 1]);
+    }
+    base = [{ name: 'part', points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], x0, x1, y0, y1, height }];
+    guess = false;
+  }
+  const parts = (base && base.length ? base : [{ name: 'part', points: [[60, 60], [196, 60], [196, 196], [60, 196]], x0: 60, x1: 196, y0: 60, y1: 196, height }])
+    .map(o => ({ ...o, h: o.height > 0 ? Math.min(o.height, height) : height, layers: walls ? walls.get(o.name) || null : null }));
+  return { segments, total: t, parts, guess };
 }
 
 // State at time t: toolhead position, segment, and how far each part was pushed.
@@ -1026,7 +1115,7 @@ function render() {
   faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
   // Paused: the parts go see-through and each sweep that reaches a part is a numbered ring around it, at the
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
-  const showRings = !!film && !view.playing && !settings.bendOnly, rings = [];
+  const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !settings.custom), rings = [];
   if (showRings) {
     // Each level: the scoop's bottom edge above the plate, and the X span it covers (all of it but for one-position pushes).
     const half = v.scoop_width / 2, lowest = settings.custom ? Math.min(...settings.steps.map(st => st.h)) : 0;
@@ -1042,13 +1131,21 @@ function render() {
       });
     });
   }
-  // Parts, pushed by the scoop.
+  // Parts, pushed by the scoop: their printed walls layer by layer, or a block where the file has none.
+  const walls = [];
+  const placePart = (p, dy, dz, alpha) => {
+    if (!p.layers) {
+      faces.push(...prism(p.points, dy, p.h, css('--part')).map(f => ({ ...f, pts: f.pts.map(q => [q[0], q[1], q[2] - dz]), alpha })));
+      return;
+    }
+    for (const l of p.layers) walls.push({ l, dy, dz, alpha, h: p.h });
+  };
   if (film) film.parts.forEach((p, i) => {
     const s = state.shift[i];
-    if (!s.gone) faces.push(...prism(p.points, s.dy, p.h, css('--part')).map(f => ({ ...f, alpha: showRings ? 0.28 : 1 })));
+    if (!s.gone) placePart(p, s.dy, 0, showRings ? 0.28 : 1);
     else if (view.t - s.at < 1.2) { // off the edge: drops into the bin below the door
       const k = (view.t - s.at) / 1.2;
-      faces.push(...prism(p.points.map(q => [q[0], q[1] - k * 30, 0]), s.dy, p.h, css('--part')).map(f => ({ ...f, pts: f.pts.map(q => [q[0], q[1], q[2] - k * k * 120]), alpha: 1 - k })));
+      placePart(p, s.dy - k * 30, k * k * 120, 1 - k);
     }
   });
   // Toolhead, scoop and gantry at the nozzle's height over the plate.
@@ -1063,13 +1160,28 @@ function render() {
   const drawn = faces.map(f => {
     const q = f.pts.map(P);
     return { f, q, depth: q.reduce((s, p) => s + p[2], 0) / q.length };
-  }).sort((a, b) => a.depth - b.depth);
+  }).concat(walls.map(w => ({ w, depth: P([w.l.cx, w.l.cy + w.dy, w.l.z - w.dz])[2] })))
+    .sort((a, b) => a.depth - b.depth);
+  const partColor = css('--part');
   // Grid on the plate first.
   ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
   for (let i = 0; i <= PLATE; i += 32) for (const [a, b] of [[[i, 0, 0.02], [i, PLATE, 0.02]], [[0, i, 0.02], [PLATE, i, 0.02]]]) {
     const pa = P(a), pb = P(b); ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
   }
-  for (const { f, q } of drawn) {
+  for (const { f, q, w } of drawn) {
+    if (w) { // one layer of walls, darker low down and lighter towards the top
+      ctx.strokeStyle = shade(partColor, 0.55 + 0.6 * Math.min(1, w.l.z / Math.max(1, w.h)), w.alpha);
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      const zz = w.l.z - w.dz;
+      for (const path of w.l.paths)
+        for (let i = 0; i < path.length; i += 2) {
+          const s = P([path[i], path[i + 1] + w.dy, zz]);
+          if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]);
+        }
+      ctx.stroke();
+      continue;
+    }
     const n = normal(f.pts), lit = f.flat ? 1 : 0.55 + 0.45 * Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
     ctx.beginPath();
     q.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
@@ -1089,6 +1201,47 @@ function render() {
     ctx.textAlign = 'right';
     ctx.fillText(String(r.n), tag[0] - 4, tag[1] + 4);
   }
+  // Paused: one arrow on the plate per position pushed, from where the scoop's face starts to past the front
+  // edge, labelled with the pushes that run there; red where one is refused. The push being edited stands out
+  // with the scoop's width.
+  if (showRings) {
+    const arrows = [];
+    if (settings.custom) {
+      const at = new Map();
+      for (const q of customPlan(info.height, info.layout, settings).pushes) {
+        const key = q.x.toFixed(1);
+        if (!at.has(key)) at.set(key, { x: q.x, y0: -1e9, steps: [], bad: false });
+        const a = at.get(key);
+        a.y0 = Math.max(a.y0, q.yStart - v.scoop_ahead);
+        if (!a.steps.includes(q.step + 1)) a.steps.push(q.step + 1);
+        a.bad = a.bad || q.hits;
+      }
+      arrows.push(...at.values());
+    } else {
+      const plan = sweepPlan(info.height, info.layout, settings);
+      for (const c of plan.columns) if (c.under > 0) arrows.push({ x: c.x, y0: c.yStart - v.scoop_ahead, steps: [] });
+    }
+    const y1 = -v.past_edge, accent = css('--scoop'), bad = css('--bad');
+    ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'center';
+    for (const a of arrows) {
+      const on = view.focus < 0 || a.steps.includes(view.focus + 1);
+      ctx.globalAlpha = on ? 1 : 0.25;
+      if (on && view.focus >= 0) { // the scoop's width along the push
+        const band = [[a.x - v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, y1], [a.x - v.scoop_width / 2, y1]].map(q => P([q[0], q[1], 0.2]));
+        ctx.fillStyle = shade(accent, 1, 0.16); ctx.beginPath();
+        band.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.fill();
+      }
+      const s = P([a.x, a.y0, 0.3]), e = P([a.x, y1, 0.3]), ang = Math.atan2(e[1] - s[1], e[0] - s[0]);
+      ctx.strokeStyle = ctx.fillStyle = a.bad ? bad : accent; ctx.lineWidth = on && view.focus >= 0 ? 3 : 2;
+      ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(e[0], e[1]); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(e[0], e[1]);
+      ctx.lineTo(e[0] - 10 * Math.cos(ang - 0.45), e[1] - 10 * Math.sin(ang - 0.45));
+      ctx.lineTo(e[0] - 10 * Math.cos(ang + 0.45), e[1] - 10 * Math.sin(ang + 0.45)); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, 2 * Math.PI); ctx.fill();
+      if (a.steps.length) ctx.fillText(a.steps.join('·'), s[0], s[1] - 7);
+    }
+    ctx.globalAlpha = 1;
+  }
   // The path still to come, dotted, on the plane of the scoop's bottom edge.
   if (film && !showRings) {
     ctx.setLineDash([3, 4]); ctx.strokeStyle = css('--accent'); ctx.globalAlpha = 0.55; ctx.beginPath();
@@ -1107,8 +1260,8 @@ function render() {
   ctx.fillStyle = css('--muted'); ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('door', door[0], door[1] + 10);
   const seg = state.seg;
-  $('phase').textContent = !film ? 'Drop a file to see its cycle' : seg ? `${seg.phase}${hz0 > 150 ? ` · plate ${hz0.toFixed(0)} mm under the nozzle` : ''}` : 'End of the print';
-  $('gline').textContent = showRings && view.t === 0 ? 'Orange rings: where each sweep meets the parts (1 is the first). Press play to watch it.'
+  $('phase').textContent = !film ? 'Drop a file to see its cycle' : film.still ? 'This plan is refused: the message on the left says why (red arrows)' : seg ? `${seg.phase}${hz0 > 150 ? ` · plate ${hz0.toFixed(0)} mm under the nozzle` : ''}` : 'End of the print';
+  $('gline').textContent = showRings && view.t === 0 ? `Arrows: where each ${settings.custom ? 'push' : 'column'} pushes; rings: where each ${settings.custom ? 'push' : 'sweep'} meets the parts. Press play to watch it.`
     : seg ? seg.line : film && film.guess ? 'No object labels: a block stands in for the parts' : '';
   const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   $('clock').textContent = film ? `${clock(view.t)} / ${clock(film.total)}` : '0:00 / 0:00';
@@ -1143,9 +1296,12 @@ function drawPlate() {
   film = null;
   if (info && !info.error && info.height > 0) {
     const text = cycle(info.height, info.layout, { ...settings, bendOnly: $('bendOnly').checked }, !$('bendOnly').checked);
-    if (text) film = filmOf(text, info.height, info.layout);
+    // A refused plan still shows the parts and its arrows, standing still.
+    film = filmOf(text || '', info.height, info.layout, info.walls);
+    film.still = !text;
   }
-  if (!film) setPlaying(false);
+  $('play').disabled = !film || film.still;
+  if (!film || film.still) setPlaying(false);
   view.t = film ? Math.min(view.t, film.total) : 0;
   render();
 }
@@ -1186,7 +1342,13 @@ function open(file) {
   $('fileName').textContent = `${file.name} · ${size}`;
   setStatus('warn', 'Reading the file…');
   const reader = new FileReader();
-  reader.onload = () => { source = reader.result; info = inspect(source); renderSteps(); update(); };
+  reader.onload = () => {
+    source = reader.result;
+    info = inspect(source);
+    if (!info.error) info.walls = wallsOf(source);
+    renderSteps();
+    update();
+  };
   reader.onerror = () => setStatus('bad', 'Cannot read the file');
   reader.readAsText(file);
 }
@@ -1233,7 +1395,8 @@ function renderSteps() {
       el.querySelector('.sum').textContent = stepSummary(st);
     };
     texts();
-    const changed = () => { save(); update(); };
+    const changed = () => { view.focus = k; save(); update(); };
+    el.addEventListener('pointerdown', () => { if (view.focus !== k) { view.focus = k; render(); } });
     hr.addEventListener('input', () => { st.h = Number(hr.value); texts(); changed(); });
     xr.addEventListener('input', () => { st.x = Number(xr.value); texts(); changed(); });
     el.querySelector('select').addEventListener('change', e => { st.n = Number(e.target.value); texts(); changed(); });
@@ -1243,7 +1406,7 @@ function renderSteps() {
       const list = settings.steps, act = b.dataset.act;
       if (act === 'del') list.splice(k, 1);
       else { const j = act === 'up' ? k - 1 : k + 1; [list[k], list[j]] = [list[j], list[k]]; }
-      renderSteps(); changed();
+      view.focus = -1; renderSteps(); save(); update();
     }));
     box.appendChild(el);
   });
@@ -1256,6 +1419,7 @@ function renderMode() {
 }
 document.querySelectorAll('#sweepMode button').forEach(b => b.addEventListener('click', () => {
   settings.custom = b.dataset.mode === 'custom';
+  view.focus = -1;
   if (settings.custom && !settings.steps.length) settings.steps = stepsFromAuto(partHeight(), settings);
   renderSteps(); save(); update();
 }));
