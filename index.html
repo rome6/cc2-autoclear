@@ -368,8 +368,9 @@ function sweepPlan(height, layout, s) {
 }
 
 // ---- custom pushes: a list run in order, each at one height (the scoop's bottom edge above the plate)
-// over the columns with parts it reaches, the X centre of each part it reaches, every column, or one X;
-// n times, at a push speed profile ----
+// over the columns with parts it reaches, the X centre of each part's layer at that height, every column, or
+// one X; n times, at a push speed profile. A part's layers (o.slices: { z, x0, x1 }) come from its printed walls;
+// without them the centre is its footprint's ----
 const STEP_WHERE = ['parts', 'centre', 'plate', 'x'], STEPS_MAX = 12;
 function stepValid(st) {
   return !!st && Number.isFinite(st.h) && st.h >= 0.5 && st.h <= 255 && STEP_WHERE.includes(st.where)
@@ -388,7 +389,7 @@ function stepsFromAuto(height, s) {
 function customPlan(height, layout, s) {
   const v = s.v, yEnd = Y_FRONT - v.past_edge + v.scoop_ahead, half = v.scoop_width / 2;
   const pushes = [], touched = new Set();
-  const parts = layout && layout.length ? layout.map(o => ({ x0: o.x0, x1: o.x1, h: o.height > 0 ? Math.min(o.height, height) : height }))
+  const parts = layout && layout.length ? layout.map(o => ({ x0: o.x0, x1: o.x1, h: o.height > 0 ? Math.min(o.height, height) : height, slices: o.slices }))
     : [{ x0: X_MIN, x1: X_MAX, h: height }];
   let error = null;
   s.steps.forEach((st, k) => {
@@ -397,7 +398,7 @@ function customPlan(height, layout, s) {
     const hitNow = [];
     const clampX = x => Math.min(Math.max(x, half), PLATE - half), atPlate = d <= v.push_z + 3;
     const xs = st.where === 'x' ? [clampX(st.x)]
-      : st.where === 'centre' ? [...new Set(parts.filter(o => o.h > st.h || atPlate).map(o => clampX((o.x0 + o.x1) / 2)))]
+      : st.where === 'centre' ? [...new Set(parts.filter(o => o.h > st.h || atPlate).map(o => clampX(centreAt(o, st.h))))]
       : columnsOf(s);
     columnHeights(height, layout, s, xs).forEach((c, i) => {
       const x = xs[i];
@@ -417,7 +418,13 @@ function customPlan(height, layout, s) {
   else if (!pushes.length) error ??= 'No push reaches a part: lower one, or make it cover the whole plate';
   return { yEnd, pushes, error };
 }
-const WHERE_TEXT = { parts: 'where it reaches parts', centre: "at each part's centre", plate: 'whole plate', x: 'one position' };
+// The X centre of a part's layer nearest a height, or of its footprint.
+function centreAt(o, z) {
+  if (!o.slices || !o.slices.length) return (o.x0 + o.x1) / 2;
+  const s = o.slices.reduce((best, x) => (Math.abs(x.z - z) < Math.abs(best.z - z) ? x : best));
+  return (s.x0 + s.x1) / 2;
+}
+const WHERE_TEXT = { parts: 'where it reaches parts', centre: "at the centre of each part's layer", plate: 'whole plate', x: 'one position' };
 
 function cycle(height, layout, s, sweep) {
   if (refusal(height, layoutBack(layout), s, sweep, layout)) return null;
@@ -1360,7 +1367,18 @@ function open(file) {
   reader.onload = () => {
     source = reader.result;
     info = inspect(source);
-    if (!info.error) info.walls = wallsOf(source);
+    if (!info.error) {
+      info.walls = wallsOf(source);
+      // Each part's X extent layer by layer, for pushes at a layer's centre.
+      for (const o of info.layout || []) {
+        const layers = info.walls.get(o.name);
+        if (layers) o.slices = layers.map(l => {
+          let x0 = 1e9, x1 = -1e9;
+          for (const q of l.paths) for (let i = 0; i < q.length; i += 2) { x0 = Math.min(x0, q[i]); x1 = Math.max(x1, q[i]); }
+          return { z: l.z, x0, x1 };
+        });
+      }
+    }
     renderSteps();
     update();
   };
@@ -1377,7 +1395,7 @@ $('drop').addEventListener('drop', e => e.dataTransfer.files[0] && open(e.dataTr
 $('bendOnly').addEventListener('change', update);
 
 // ---- custom pushes editor ----
-const WHERE_NAMES = { parts: 'Where parts are', centre: 'Part centre', plate: 'Whole plate', x: 'One position' };
+const WHERE_NAMES = { parts: 'Where parts are', centre: 'Layer centre', plate: 'Whole plate', x: 'One position' };
 function segHtml(names, on, attr) {
   return `<div class="seg sm" data-${attr}>${Object.entries(names).map(([id, name]) => `<button type="button" data-id="${id}" class="${id === on ? 'on' : ''}">${name}</button>`).join('')}</div>`;
 }

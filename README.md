@@ -38,8 +38,8 @@ El archivo no sale de tu ordenador.
 - La pieza más alta la marca el doblador: antes de doblar, la cama baja rápido hasta 10 mm antes del punto de
   contacto de la pestaña, y la pieza tiene que caber ahí bajo la boquilla con el margen.
 - **Empujes a medida:** en lugar de las pasadas automáticas, una lista de empujes que se ejecutan en orden.
-  Cada uno tiene su altura de la pala sobre la placa, dónde empuja (las columnas donde llega a piezas, el centro de cada
-  pieza a la que llega, toda la placa o una sola posición X), cuántas veces y a qué velocidad. Una pieza que ya ha golpeado un empuje anterior se da por
+  Cada uno tiene su altura de la pala sobre la placa, dónde empuja (las columnas donde llega a piezas, el centro de la capa
+  de cada pieza a esa altura, toda la placa o una sola posición X), cuántas veces y a qué velocidad. Una pieza que ya ha golpeado un empuje anterior se da por
   retirada; solo rechaza un empuje cuyo pórtico chocaría con una pieza que ningún empuje anterior ha tocado. «Empezar desde el plan automático» copia las pasadas automáticas
   como punto de partida.
 - **Prueba de espera de temperatura:** descarga un G-code que no mueve nada; calienta la cama a 45 °C y la deja
