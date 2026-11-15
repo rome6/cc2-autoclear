@@ -20,6 +20,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
 h1 { font-size: 20px; margin: 0 0 4px; }
@@ -73,6 +74,19 @@ details.advanced { margin-top: 16px; }
 .seg button { border: 0; border-radius: 0; padding: 6px 14px; background: var(--panel); }
 .seg button + button { border-left: 1px solid var(--edge); }
 .seg button.on { background: var(--accent); color: #fff; }
+.seg.sm button { padding: 4px 10px; font-size: 12px; }
+#sweepMode { margin: 0 0 10px; }
+.steps { display: grid; gap: 10px; }
+.push { border: 1px solid var(--edge); border-radius: 8px; padding: 10px; display: grid; gap: 8px; min-width: 0; }
+.push .head { display: flex; align-items: center; gap: 8px; }
+.push .head b { color: var(--scoop); }
+.push .head b { flex: 1; }
+.push .sum { margin-top: -4px; }
+.push .head button { padding: 2px 8px; font-size: 12px; }
+.push .opts { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.push .opts .seg { margin-top: 0; }
+.push .opts select { min-width: 0; width: auto; padding: 3px 6px; }
+.steps-add { display: flex; flex-wrap: wrap; gap: 8px; }
 details.advanced > summary { color: var(--muted); }
 details.advanced details { margin: 8px; }
 .viewer { position: relative; border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; background: var(--stage); }
@@ -109,9 +123,21 @@ details.advanced details { margin: 8px; }
 
       <h2 class="step">2. Sweeps</h2>
       <p class="hint" id="sweepFor"></p>
+      <div class="seg" id="sweepMode" role="group" aria-label="How the sweeps are planned">
+        <button data-mode="auto">Automatic</button><button data-mode="custom">Custom pushes</button>
+      </div>
       <div class="sweeps">
         <svg id="sideView" viewBox="0 0 280 230" role="img" aria-label="Side view of the sweep levels against the part"></svg>
+        <div>
         <div id="sweepSliders" class="sliders"></div>
+        <div id="stepEditor" hidden>
+          <div id="steps" class="steps"></div>
+          <div class="steps-add row">
+            <button id="addStep">+ Add push</button>
+            <button id="fromAuto" title="Replace the list with the automatic sweeps for this part">Start from the automatic plan</button>
+          </div>
+        </div>
+        </div>
       </div>
       <p class="hint" id="sweepNote"></p>
 
@@ -181,7 +207,8 @@ details.advanced details { margin: 8px; }
 </main>
 
 <script>
-// CORE-BEGIN: the same rules as CC2 Control's src/bed_clear.h, so both produce the same G-code.
+// CORE-BEGIN: the same rules as CC2 Control's src/bed_clear.h, so both produce the same G-code. The custom
+// pushes (s.custom) are this page's own.
 const MARK = 'CC2 Control automatic removal';
 const FARMLOOP_MARK = 'FarmLoop CC2';
 const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
@@ -235,7 +262,7 @@ function defaults() {
   const v = {};
   for (const [key, value] of FIELDS) v[key] = value;
   v.bend_before_z = v.bend_touch_z - BEND_APPROACH;
-  return { v, bendOnly: false, travel: 'normal', push: 'normal' };
+  return { v, bendOnly: false, travel: 'normal', push: 'normal', custom: false, steps: [] };
 }
 // The feed rates of a speed profile into the settings.
 function applySpeeds(s) {
@@ -281,7 +308,8 @@ function layoutBack(layout) {
 }
 // Allowed, but worth knowing: gaps between sweeps taller than the scoop leave a band of the part that no
 // sweep touches, and if a part stays stuck the next, lower sweep can drive the gantry into it.
-function warnings(height, s) {
+function warnings(height, s, layout) {
+  if (s.custom) return customPlan(height, layout, s).warn;
   const v = s.v, passes = passesOf(height, s), out = [];
   for (let k = 1; k < passes.length; k++) {
     const gap = passes[k - 1] - passes[k];
@@ -296,7 +324,7 @@ function warnings(height, s) {
   }
   return out;
 }
-function refusal(height, back, s, sweep) {
+function refusal(height, back, s, sweep, layout) {
   const v = s.v;
   if (!(height > 0)) return 'The part height is unknown';
   if (height + v.margin > v.bend_before_z)
@@ -304,13 +332,12 @@ function refusal(height, back, s, sweep) {
   if (!(v.bend_before_z < v.bend_touch_z && v.bend_touch_z < v.bend_bottom_z))
     return 'The bender heights must rise from the fast move to the touch point to the bottom';
   if (!sweep) return null;
-  const passes = passesOf(height, s);
-  if (height >= passes[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
+  if (!s.custom && height >= passesOf(height, s)[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
   if (v.scoop_high <= v.scoop_low) return "The scoop's top edge must be above its bottom edge";
   if (Y_BACK - v.scoop_ahead <= Y_FRONT) return 'The scoop has no travel in Y';
   if (back > Y_BACK - v.scoop_ahead) return 'A part stands at the back of the plate, behind where the scoop starts';
   if (v.scoop_width <= v.column_overlap) return 'The column overlap must be smaller than the scoop';
-  return null;
+  return s.custom ? customPlan(height, layout, s).error : null;
 }
 // Height under each column (0: empty) and the furthest-back Y there. Without a layout every column
 // holds the tallest part up to the back edge; a part of unknown height counts as the tallest.
@@ -340,8 +367,53 @@ function sweepPlan(height, layout, s) {
   };
 }
 
+// ---- custom pushes: a list run in order, each at one height (the scoop's bottom edge above the plate)
+// over the columns with parts it reaches, every column, or one X; n times, at a push speed profile ----
+const STEP_WHERE = ['parts', 'plate', 'x'], STEPS_MAX = 12;
+function stepValid(st) {
+  return !!st && Number.isFinite(st.h) && st.h >= 0.5 && st.h <= 255 && STEP_WHERE.includes(st.where)
+    && Number.isFinite(st.x) && st.x >= 0 && st.x <= PLATE && Number.isInteger(st.n) && st.n >= 1 && st.n <= 5
+    && !!SPEEDS.push[st.speed];
+}
+// The automatic levels as a custom list: the starting point of the editor.
+function stepsFromAuto(height, s) {
+  const passes = passesOf(height, s), last = passes.length - 1, slower = { fast: 'normal', normal: 'slow', slow: 'slow' };
+  return passes.map((d, k) => ({ h: Math.round((d + s.v.scoop_low) * 10) / 10, where: 'parts', x: PLATE / 2,
+    n: k === last ? Math.trunc(s.v.last_pass_repeats) : 1, speed: k === last ? s.push : slower[s.push] }));
+}
+// Every push in order, with where it starts, and what refuses or warns. A column a push meets for the first
+// time must pass under the gantry whole; after a higher push there, the warning is the automatic sweeps' own:
+// a gap so wide that a part the higher push left standing meets the gantry.
+function customPlan(height, layout, s) {
+  const v = s.v, yEnd = Y_FRONT - v.past_edge + v.scoop_ahead, half = v.scoop_width / 2;
+  const pushes = [], warn = [], swept = new Map(); // column -> lowest push so far
+  let error = null;
+  s.steps.forEach((st, k) => {
+    const d = st.h - v.scoop_low;
+    if (d < 0.2) { error ??= `Push ${k + 1} is lower than the scoop can go`; return; }
+    const xs = st.where === 'x' ? [Math.min(Math.max(st.x, half), PLATE - half)] : columnsOf(s);
+    columnHeights(height, layout, s, xs).forEach((c, i) => {
+      const x = xs[i], key = x.toFixed(1);
+      if (st.where === 'parts' && !(c.under > 0 && (c.under > st.h || d <= v.push_z + 3))) return;
+      const above = swept.get(key);
+      if (above === undefined && c.under >= d + v.gantry_low)
+        error ??= `Push ${k + 1} at X ${fixed(x, 1)}: the gantry would hit the ${fixed(c.under, 1)} mm part. Add a higher push there first`;
+      else if (above !== undefined && above >= d + v.gantry_low && !warn.length)
+        warn.push(`Push ${k + 1} at X ${fixed(x, 1)} is ${fixed(above - st.h, 1)} mm under the one above it: if the part does not come off there, the gantry hits it.`);
+      swept.set(key, Math.min(above ?? Infinity, st.h));
+      const from = c.under > 0 ? c.back + BEHIND + v.scoop_ahead : Y_BACK;
+      for (let r = 0; r < st.n; r++)
+        pushes.push({ step: k, x, d, feed: SPEEDS.push[st.speed].f_push, yStart: Math.max(Math.min(from, Y_BACK), yEnd) });
+    });
+  });
+  if (!s.steps.length) error = 'Add at least one push';
+  else if (!pushes.length) error ??= 'No push reaches a part: lower one, or make it cover the whole plate';
+  return { yEnd, pushes, warn, error };
+}
+const WHERE_TEXT = { parts: 'where it reaches parts', plate: 'whole plate', x: 'one position' };
+
 function cycle(height, layout, s, sweep) {
-  if (refusal(height, layoutBack(layout), s, sweep)) return null;
+  if (refusal(height, layoutBack(layout), s, sweep, layout)) return null;
   const v = s.v, out = [], line = t => out.push(t);
   const up = height + v.margin, zFast = int(v.f_z_fast), zBend = int(v.f_z_bend), release = int(v.release_bed_temp);
   // Over the bin nothing but the enclosure's top stands above the plate: the bed comes all the way up, or as
@@ -351,6 +423,19 @@ function cycle(height, layout, s, sweep) {
     line(`G1 X${fixed(BIN_X, 1)} Y${fixed(BIN_Y_ENTRY, 1)} F${int(v.f_travel)} ; toolhead behind the plate`);
     line(`G1 Y${fixed(BIN_Y, 1)} F${int(v.f_travel)} ; over the purge bin`);
     line(`G1 Z${fixed(cool, 1)} F${zFast} ; plate ${cool === TOP_Z ? 'all the way' : 'as far as the parts allow'} up, under the fans`);
+  };
+  const blowAndEnd = () => {
+    park();
+    if (v.blow_ms > 0) {
+      line('M106 S255');
+      line('M106 P2 S255');
+      line(`G4 P${int(v.blow_ms)}`);
+      line('M107');
+      line('M106 P2 S0');
+    }
+    line('M84');
+    line(`; ==== end ${MARK} ====`);
+    return out.join('\n') + '\n';
   };
   line(`; ==== ${MARK}: ${sweep ? 'cool, flex and sweep' : 'cool and flex only (test)'} ====`);
   line(`; part height ${fixed(height, 1)} mm`);
@@ -376,6 +461,26 @@ function cycle(height, layout, s, sweep) {
     line(`; bend-only test: the bed stays at Z ${g(v.bend_before_z)}, no sweep, motors left on and homed`);
     line(`; ==== end ${MARK} ====`);
     return out.join('\n') + '\n';
+  }
+  if (s.custom) {
+    // Each push ends with the bed down far enough to clear every part, as any of them may still stand.
+    const plan = customPlan(height, layout, s);
+    line(`; --- sweep: ${s.steps.length} custom push step(s), ${plan.pushes.length} push(es) in all ---`);
+    line(`G1 Z${fixed(up, 1)} F${zFast} ; plate up first, the parts just under the scoop, toolhead over the bin`);
+    let step = -1;
+    for (const p of plan.pushes) {
+      if (p.step !== step) {
+        const st = s.steps[(step = p.step)];
+        line(`; pass ${step + 1}/${s.steps.length}: scoop ${fixed(st.h, 1)} mm above the plate, ${st.where === 'x' ? `at X ${fixed(p.x, 1)}` : WHERE_TEXT[st.where]}, ${st.n}x, ${st.speed}`);
+      }
+      const x = Math.min(Math.max(p.x - v.scoop_offset_x, X_MIN), X_MAX);
+      line(`G1 X${fixed(x, 1)} Y${fixed(p.yStart, 1)} F${int(v.f_travel)} ; column at X ${fixed(p.x, 1)}`);
+      line(`G1 Z${fixed(p.d, 1)} F${zFast}`);
+      line(`G1 Y${fixed(plan.yEnd, 1)} F${int(p.feed)} ; push past the front edge`);
+      line(`G1 Z${fixed(up, 1)} F${zFast} ; bed down to clear every part`);
+    }
+    line('; --- last blow over the cleared plate ---');
+    return blowAndEnd();
   }
   const plan = sweepPlan(height, layout, s);
   line(`; --- sweep: up to ${plan.passes.length} pass(es) top down x ${plan.columns.length} columns ---`);
@@ -409,17 +514,7 @@ function cycle(height, layout, s, sweep) {
   });
   line('; --- last blow over the cleared plate ---');
   if (zNow < up) line(`G1 Z${fixed(up, 1)} F${zFast}`);
-  park();
-  if (v.blow_ms > 0) {
-    line('M106 S255');
-    line('M106 P2 S255');
-    line(`G4 P${int(v.blow_ms)}`);
-    line('M107');
-    line('M106 P2 S0');
-  }
-  line('M84');
-  line(`; ==== end ${MARK} ====`);
-  return out.join('\n') + '\n';
+  return blowAndEnd();
 }
 
 // ---- reading the slicer's file ----
@@ -526,7 +621,7 @@ function inspect(text) {
 // The processed file: the block with the purge moved and the cycle in place of ELEGOO's M84, `copies` times.
 function build(text, info, s, copies) {
   const sweep = !s.bendOnly;
-  const why = refusal(info.height, layoutBack(info.layout), s, sweep);
+  const why = refusal(info.height, layoutBack(info.layout), s, sweep, info.layout);
   if (why) return { error: why };
   const tail = cycle(info.height, info.layout, s, sweep);
   let block = info.purge
@@ -542,7 +637,7 @@ function build(text, info, s, copies) {
 // the first move and nothing moves.
 function clearOnly(info, s, name) {
   const sweep = !s.bendOnly;
-  const why = refusal(info.height, layoutBack(info.layout), s, sweep);
+  const why = refusal(info.height, layoutBack(info.layout), s, sweep, info.layout);
   if (why) return { error: why };
   const up = info.height + s.v.margin;
   const text = [
@@ -563,7 +658,6 @@ function clearOnly(info, s, name) {
 
 // ---- page ----
 const STORE = 'cc2-autoclear-settings';
-let settings = load(), source = null, info = null, fileName = '';
 
 // The scoop and the gantry are the printer's and the mount's own: always the defaults. The bed's fast
 // approach follows the bender's touch point, and the feed rates follow the speed profiles.
@@ -576,13 +670,16 @@ function load() {
     for (const [key] of FIELDS) if (!FIXED_KEYS.has(key) && valueValid(key, saved.v?.[key])) s.v[key] = saved.v[key];
     if (SPEEDS.travel[saved.travel]) s.travel = saved.travel;
     if (SPEEDS.push[saved.push]) s.push = saved.push;
+    s.custom = saved.custom === true;
+    if (Array.isArray(saved.steps)) s.steps = saved.steps.filter(stepValid).slice(0, STEPS_MAX);
   } catch {}
   s.v.bend_before_z = s.v.bend_touch_z - BEND_APPROACH;
   return applySpeeds(s);
 }
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push })); } catch {}
+  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push, custom: settings.custom, steps: settings.steps })); } catch {}
 }
+let settings = load(), source = null, info = null, fileName = '';
 const $ = id => document.getElementById(id);
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -746,8 +843,9 @@ function buildSliders() {
 
 // The side view next to the sliders: the part, each sweep's scoop at its height and the gantry of the first one.
 function drawSide() {
-  const v = settings.v, h = partHeight(), passes = levels(), W = 280, H = 230, base = 205, left = 34;
-  const top = Math.max(h, passes[0] + v.gantry_low) + 12, k = (base - 14) / top, Y = z => base - z * k;
+  const v = settings.v, h = partHeight(), W = 280, H = 230, base = 205, left = 34;
+  const passes = settings.custom && settings.steps.length ? settings.steps.map(st => st.h - v.scoop_low) : levels();
+  const top = Math.max(h, ...passes.map(d => d + v.gantry_low)) + 12, k = (base - 14) / top, Y = z => base - z * k;
   const out = [];
   out.push(`<line x1="${left - 6}" y1="${base}" x2="${W - 8}" y2="${base}" stroke="var(--muted)" stroke-width="2"/>`);
   for (let z = 0; z <= top; z += top > 120 ? 50 : 20)
@@ -755,7 +853,7 @@ function drawSide() {
   out.push(`<rect x="150" y="${Y(h)}" width="80" height="${h * k}" rx="2" fill="var(--part)" fill-opacity=".75"/>`);
   out.push(`<text x="190" y="${Math.min(Y(h) + 14, base - 4)}" text-anchor="middle" font-size="10" fill="#fff">${mm(h)}</text>`);
   const g = Y(passes[0] + v.gantry_low);
-  out.push(`<rect x="${left}" y="${g - 6}" width="${W - left - 8}" height="6" fill="var(--head)" fill-opacity=".6"/><text x="${W - 10}" y="${g - 9}" text-anchor="end" font-size="9" fill="var(--muted)">gantry, 1st sweep</text>`);
+  out.push(`<rect x="${left}" y="${g - 6}" width="${W - left - 8}" height="6" fill="var(--head)" fill-opacity=".6"/><text x="${W - 10}" y="${g - 9}" text-anchor="end" font-size="9" fill="var(--muted)">gantry, ${settings.custom ? 'push 1' : '1st sweep'}</text>`);
   passes.forEach((d, i) => {
     const x = 120 - i * 12, y0 = Y(d + v.scoop_high), y1 = Y(d + v.scoop_low);
     out.push(`<rect x="${x}" y="${y0}" width="10" height="${y1 - y0}" fill="var(--scoop)" fill-opacity=".45" stroke="var(--scoop)"/>`);
@@ -772,11 +870,14 @@ function update() {
   settings.bendOnly = $('bendOnly').checked;
   $('copies').disabled = settings.bendOnly;
   for (const refresh of sliders) refresh();
+  renderMode();
   drawSide();
   const fileHeight = info && !info.error && info.height > 0;
   $('sweepFor').textContent = fileHeight ? `For this file's tallest part, ${mm(info.height)}.` : `Shown for an example ${EXAMPLE_HEIGHT} mm part until you drop a file.`;
-  const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings);
-  $('sweepNote').textContent = warn.length ? warn.join(' ')
+  const layout = info && !info.error ? info.layout : null;
+  const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings, layout);
+  $('sweepNote').textContent = warn.length ? warn.join(' ') : settings.custom
+    ? 'Pushes run in the order of the list. "Where it reaches parts" covers the columns whose parts stand taller than the push; "Whole plate" covers every column, from the back edge where it is empty.'
     : `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
   $('sweepNote').style.color = warn.length ? 'var(--warn)' : '';
   const facts = $('facts');
@@ -789,9 +890,10 @@ function update() {
   if (info.layout) add(`Parts: ${info.layout.map(o => `${o.name.replace(/\.stl_id_\d+_copy_\d+$/, '')} (${o.height > 0 ? o.height.toFixed(1) : '?'} mm)`).join(', ')}`);
   else add('No object labels in the file (turn on "Label objects" in OrcaSlicer): every column is swept for the tallest part.');
   add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');
-  const sweep = !settings.bendOnly, why = refusal(info.height, layoutBack(info.layout), settings, sweep);
+  const sweep = !settings.bendOnly, why = refusal(info.height, layoutBack(info.layout), settings, sweep, info.layout);
   if (why) { setStatus('bad', 'Cannot clear this plate: ' + why); return; }
-  if (sweep) {
+  if (sweep && settings.custom) add(`${customPlan(info.height, info.layout, settings).pushes.length} pushes in all, from ${settings.steps.length} step${settings.steps.length === 1 ? '' : 's'} of the list.`);
+  else if (sweep) {
     const plan = sweepPlan(info.height, info.layout, settings), last = plan.passes.length - 1;
     const pushes = plan.passes.reduce((n, d, k) => n + plan.columns.filter(c => c.under > 0 && (k === last || c.under > d + settings.v.scoop_low)).length
       * (k === last ? settings.v.last_pass_repeats : 1), 0);
@@ -926,12 +1028,17 @@ function render() {
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
   const showRings = !!film && !view.playing && !settings.bendOnly, rings = [];
   if (showRings) {
-    const passes = passesOf(info.height, settings), last = passes.length - 1;
+    // Each level: the scoop's bottom edge above the plate, and the X span it covers (all of it but for one-position pushes).
+    const half = v.scoop_width / 2, lowest = settings.custom ? Math.min(...settings.steps.map(st => st.h)) : 0;
+    const levelsShown = settings.custom
+      ? settings.steps.map(st => ({ z: st.h, x0: st.where === 'x' ? st.x - half : -1e9, x1: st.where === 'x' ? st.x + half : 1e9, low: st.h === lowest }))
+      : passesOf(info.height, settings).map((d, k, all) => ({ z: d + v.scoop_low, x0: -1e9, x1: 1e9, low: k === all.length - 1 }));
     film.parts.forEach((p, i) => {
       if (state.shift[i].gone) return;
-      passes.forEach((d, k) => {
-        const z = d + v.scoop_low;
-        if (k === last || p.h > z) rings.push({ pts: p.points.map(q => [q[0], q[1] + state.shift[i].dy, Math.min(z, p.h)]), n: k + 1 });
+      const px0 = Math.min(...p.points.map(q => q[0])), px1 = Math.max(...p.points.map(q => q[0]));
+      levelsShown.forEach((l, k) => {
+        if ((l.low || p.h > l.z) && px1 > l.x0 && px0 < l.x1)
+          rings.push({ pts: p.points.map(q => [q[0], q[1] + state.shift[i].dy, Math.min(l.z, p.h)]), n: k + 1 });
       });
     });
   }
@@ -1079,7 +1186,7 @@ function open(file) {
   $('fileName').textContent = `${file.name} · ${size}`;
   setStatus('warn', 'Reading the file…');
   const reader = new FileReader();
-  reader.onload = () => { source = reader.result; info = inspect(source); update(); };
+  reader.onload = () => { source = reader.result; info = inspect(source); renderSteps(); update(); };
   reader.onerror = () => setStatus('bad', 'Cannot read the file');
   reader.readAsText(file);
 }
@@ -1091,8 +1198,75 @@ for (const ev of ['dragenter', 'dragover']) $('drop').addEventListener(ev, e => 
 for (const ev of ['dragleave', 'drop']) $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); });
 $('drop').addEventListener('drop', e => e.dataTransfer.files[0] && open(e.dataTransfer.files[0]));
 $('bendOnly').addEventListener('change', update);
+
+// ---- custom pushes editor ----
+const WHERE_NAMES = { parts: 'Where parts are', plate: 'Whole plate', x: 'One position' };
+function segHtml(names, on, attr) {
+  return `<div class="seg sm" data-${attr}>${Object.entries(names).map(([id, name]) => `<button type="button" data-id="${id}" class="${id === on ? 'on' : ''}">${name}</button>`).join('')}</div>`;
+}
+function stepSummary(st) {
+  const mmS = f => `${Math.round(f / 60)} mm/s`;
+  return `${mm(st.h)} above the plate · ${st.where === 'x' ? `X ${Math.round(st.x)}` : WHERE_NAMES[st.where].toLowerCase()} · ${st.n}× · ${mmS(SPEEDS.push[st.speed].f_push)}`;
+}
+// The list, rebuilt when a push is added, removed, moved or changes where it runs; a slider only updates its own texts.
+function renderSteps() {
+  const box = $('steps'), v = settings.v, half = v.scoop_width / 2, hMin = Math.ceil((v.push_z + v.scoop_low) * 2) / 2;
+  box.innerHTML = '';
+  settings.steps.forEach((st, k) => {
+    const el = document.createElement('div');
+    el.className = 'push';
+    el.innerHTML = `<div class="head"><b>Push ${k + 1}</b>
+        <button type="button" data-act="up" aria-label="Move push ${k + 1} up" ${k ? '' : 'disabled'}>↑</button>
+        <button type="button" data-act="down" aria-label="Move push ${k + 1} down" ${k < settings.steps.length - 1 ? '' : 'disabled'}>↓</button>
+        <button type="button" data-act="del" aria-label="Remove push ${k + 1}">✕</button></div>
+      <div class="hint sum"></div>
+      <div class="slider"><div class="top"><b>Scoop height above the plate</b><output></output></div><input type="range" data-key="h" aria-label="Push ${k + 1} height"></div>
+      <div class="slider" ${st.where === 'x' ? '' : 'hidden'}><div class="top"><b>X position (scoop centre)</b><output></output></div><input type="range" data-key="x" aria-label="Push ${k + 1} X position"></div>
+      <div class="opts">${segHtml(WHERE_NAMES, st.where, 'where')}${segHtml(PROFILE_NAMES, st.speed, 'speed')}
+        <label class="hint">Passes <select data-key="n" aria-label="Push ${k + 1} passes">${[1, 2, 3, 4, 5].map(n => `<option ${n === st.n ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>`;
+    const [hr, xr] = el.querySelectorAll('input[type=range]'), outs = el.querySelectorAll('output');
+    Object.assign(hr, { min: hMin, max: Math.max(hMin + 1, Math.ceil(partHeight() * 2) / 2), step: 0.5, value: st.h });
+    Object.assign(xr, { min: Math.ceil(half), max: Math.floor(PLATE - half), step: 1, value: st.x });
+    const texts = () => {
+      outs[0].textContent = mm(st.h);
+      outs[1].textContent = `X ${Math.round(st.x)}`;
+      el.querySelector('.sum').textContent = stepSummary(st);
+    };
+    texts();
+    const changed = () => { save(); update(); };
+    hr.addEventListener('input', () => { st.h = Number(hr.value); texts(); changed(); });
+    xr.addEventListener('input', () => { st.x = Number(xr.value); texts(); changed(); });
+    el.querySelector('select').addEventListener('change', e => { st.n = Number(e.target.value); texts(); changed(); });
+    for (const attr of ['where', 'speed'])
+      el.querySelectorAll(`[data-${attr}] button`).forEach(b => b.addEventListener('click', () => { st[attr] = b.dataset.id; renderSteps(); changed(); }));
+    el.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+      const list = settings.steps, act = b.dataset.act;
+      if (act === 'del') list.splice(k, 1);
+      else { const j = act === 'up' ? k - 1 : k + 1; [list[k], list[j]] = [list[j], list[k]]; }
+      renderSteps(); changed();
+    }));
+    box.appendChild(el);
+  });
+  $('addStep').disabled = settings.steps.length >= STEPS_MAX;
+}
+function renderMode() {
+  document.querySelectorAll('#sweepMode button').forEach(b => b.classList.toggle('on', (b.dataset.mode === 'custom') === settings.custom));
+  $('sweepSliders').hidden = settings.custom;
+  $('stepEditor').hidden = !settings.custom;
+}
+document.querySelectorAll('#sweepMode button').forEach(b => b.addEventListener('click', () => {
+  settings.custom = b.dataset.mode === 'custom';
+  if (settings.custom && !settings.steps.length) settings.steps = stepsFromAuto(partHeight(), settings);
+  renderSteps(); save(); update();
+}));
+$('addStep').addEventListener('click', () => {
+  const v = settings.v;
+  settings.steps.push({ h: Math.ceil((v.push_z + v.scoop_low) * 2) / 2, where: 'parts', x: PLATE / 2, n: 1, speed: settings.push });
+  renderSteps(); save(); update();
+});
+$('fromAuto').addEventListener('click', () => { settings.steps = stepsFromAuto(partHeight(), settings); renderSteps(); save(); update(); });
 $('copies').addEventListener('input', update);
-$('reset').addEventListener('click', () => { settings = applySpeeds(defaults()); save(); renderFields(); update(); });
+$('reset').addEventListener('click', () => { settings = applySpeeds(defaults()); save(); renderFields(); renderSteps(); update(); });
 $('showCycle').addEventListener('click', () => { $('cycle').hidden = !$('cycle').hidden; });
 function saveFile(text, name) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
@@ -1137,7 +1311,7 @@ $('download').addEventListener('click', () => {
 
 const PROFILE_NAMES = { slow: 'Slow', normal: 'Conservative', fast: 'Fast' };
 function renderSpeeds() {
-  for (const box of document.querySelectorAll('.seg')) {
+  for (const box of document.querySelectorAll('.seg[data-speed]')) {
     const kind = box.dataset.speed;
     box.innerHTML = Object.entries(PROFILE_NAMES).map(([id, name]) =>
       `<button data-id="${id}" class="${settings[kind] === id ? 'on' : ''}">${name}</button>`).join('');
@@ -1152,6 +1326,7 @@ function renderSpeeds() {
 }
 renderFields();
 buildSliders();
+renderSteps();
 renderSpeeds();
 update();
 </script>

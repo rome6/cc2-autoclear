@@ -14,7 +14,8 @@ El archivo no sale de tu ordenador.
 - **Final:** cambia el `M84` del final de ELEGOO por el ciclo:
   1. aparca el cabezal sobre el cubilete (X 51, Y 264), sube la cama arriba del todo (Z 3), o hasta donde deje
      el espacio libre que indiques por encima de la boquilla si la pieza es alta, y enfría con el ventilador de
-     capa y el auxiliar (`M106 P2`) hasta la temperatura de despegue;
+     capa y el auxiliar (`M106 P2`) hasta la temperatura de despegue, y como mínimo el tiempo que indiques
+     (el firmware de la CC2 se ha saltado `TEMPERATURE_WAIT` en una prueba);
   2. dobla la placa contra el doblador (baja la cama, la mantiene y repite);
   3. barre de arriba abajo por columnas. Primero sube la cama con el cabezal aún sobre el cubilete,
      luego el cabezal cruza a su columna y la cama hace el último tramo. Cada columna solo recibe las pasadas
@@ -36,6 +37,13 @@ El archivo no sale de tu ordenador.
   placa); si la separación deja al pórtico sin margen ante una pieza que no se suelte, lo avisa en naranja.
 - La pieza más alta la marca el doblador: antes de doblar, la cama baja rápido hasta 10 mm antes del punto de
   contacto de la pestaña, y la pieza tiene que caber ahí bajo la boquilla con el margen.
+- **Empujes a medida:** en lugar de las pasadas automáticas, una lista de empujes que se ejecutan en orden.
+  Cada uno tiene su altura de la pala sobre la placa, dónde empuja (las columnas donde llega a piezas, toda la placa
+  o una sola posición X), cuántas veces y a qué velocidad. Rechaza un empuje cuyo pórtico chocaría con una pieza que
+  ningún empuje anterior ha tocado en esa columna. «Empezar desde el plan automático» copia las pasadas automáticas
+  como punto de partida.
+- **Prueba de espera de temperatura:** descarga un G-code que no mueve nada; calienta la cama a 45 °C y la deja
+  enfriar probando `TEMPERATURE_WAIT` y `M190`, para ver en el log de la impresora cuál espera de verdad.
 - Velocidades por perfiles (lento, conservador, rápido), uno para los movimientos que no empujan y otro para los
   que empujan. Las medidas de la pala y del pórtico son fijas.
 - Vista lateral de las pasadas y un visor 3D que reproduce el G-code real del ciclo: con la animación parada,
@@ -45,7 +53,8 @@ El archivo no sale de tu ordenador.
 
 Las medidas por defecto (pala, pórtico, doblador) vienen de FarmLoop y no están comprobadas en la impresora.
 La posición del cubilete sale de `printer_dsp.cfg` de la CC2. Empieza siempre por la **prueba de solo doblado**
-con una pieza pequeña, mirando la impresora y con la mano cerca de la parada de emergencia.
+con una pieza pequeña, mirando la impresora y con la mano cerca de la parada de emergencia. El botón de cancelar
+no basta: la impresora ya tiene los movimientos del ciclo en cola y los termina igualmente.
 
 En OrcaSlicer activa **Etiquetar objetos** para que el barrido por columnas use la posición y la altura de
 cada pieza; sin etiquetas barre todas las columnas a la altura de la pieza más alta.
