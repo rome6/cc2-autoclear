@@ -308,8 +308,8 @@ function layoutBack(layout) {
 }
 // Allowed, but worth knowing: gaps between sweeps taller than the scoop leave a band of the part that no
 // sweep touches, and if a part stays stuck the next, lower sweep can drive the gantry into it.
-function warnings(height, s, layout) {
-  if (s.custom) return customPlan(height, layout, s).warn;
+function warnings(height, s) {
+  if (s.custom) return []; // custom pushes only refuse (customPlan)
   const v = s.v, passes = passesOf(height, s), out = [];
   for (let k = 1; k < passes.length; k++) {
     const gap = passes[k - 1] - passes[k];
@@ -381,34 +381,37 @@ function stepsFromAuto(height, s) {
   return passes.map((d, k) => ({ h: Math.round((d + s.v.scoop_low) * 10) / 10, where: 'parts', x: PLATE / 2,
     n: k === last ? Math.trunc(s.v.last_pass_repeats) : 1, speed: k === last ? s.push : slower[s.push] }));
 }
-// Every push in order, with where it starts, and what refuses or warns. A column a push meets for the first
-// time must pass under the gantry whole; after a higher push there, the warning is the automatic sweeps' own:
-// a gap so wide that a part the higher push left standing meets the gantry.
+// Every push in order, with where it starts, and what refuses it: a part no earlier push has touched must pass
+// under the gantry whole. One an earlier push already hit is taken as gone. Without object labels the whole
+// plate is one part of the tallest height.
 function customPlan(height, layout, s) {
   const v = s.v, yEnd = Y_FRONT - v.past_edge + v.scoop_ahead, half = v.scoop_width / 2;
-  const pushes = [], warn = [], swept = new Map(); // column -> lowest push so far
+  const pushes = [], touched = new Set();
+  const parts = layout && layout.length ? layout.map(o => ({ x0: o.x0, x1: o.x1, h: o.height > 0 ? Math.min(o.height, height) : height }))
+    : [{ x0: X_MIN, x1: X_MAX, h: height }];
   let error = null;
   s.steps.forEach((st, k) => {
     const d = st.h - v.scoop_low;
     if (d < 0.2) { error ??= `Push ${k + 1} is lower than the scoop can go`; return; }
+    const hitNow = [];
     const xs = st.where === 'x' ? [Math.min(Math.max(st.x, half), PLATE - half)] : columnsOf(s);
     columnHeights(height, layout, s, xs).forEach((c, i) => {
-      const x = xs[i], key = x.toFixed(1);
+      const x = xs[i];
       if (st.where === 'parts' && !(c.under > 0 && (c.under > st.h || d <= v.push_z + 3))) return;
-      const above = swept.get(key), hits = above === undefined && c.under >= d + v.gantry_low;
+      const inColumn = parts.map((o, i) => i).filter(i => parts[i].x1 > x - half && parts[i].x0 < x + half);
+      const tall = inColumn.filter(i => parts[i].h >= d + v.gantry_low), hits = tall.some(i => !touched.has(i));
       if (hits)
-        error ??= `Push ${k + 1} at X ${fixed(x, 1)}: the gantry would hit the ${fixed(c.under, 1)} mm part. Add a higher push there first`;
-      else if (above !== undefined && above >= d + v.gantry_low && !warn.length)
-        warn.push(`Push ${k + 1} at X ${fixed(x, 1)} is ${fixed(above - st.h, 1)} mm under the one above it: if the part does not come off there, the gantry hits it.`);
-      swept.set(key, Math.min(above ?? Infinity, st.h));
+        error ??= `Push ${k + 1} at X ${fixed(x, 1)}: the gantry would hit a part no earlier push has touched. Add a higher push on it first`;
+      for (const i of inColumn) if (parts[i].h > st.h || d <= v.push_z + 3) hitNow.push(i);
       const from = c.under > 0 ? c.back + BEHIND + v.scoop_ahead : Y_BACK;
       for (let r = 0; r < st.n; r++)
         pushes.push({ step: k, x, d, feed: SPEEDS.push[st.speed].f_push, yStart: Math.max(Math.min(from, Y_BACK), yEnd), hits });
     });
+    for (const i of hitNow) touched.add(i);
   });
   if (!s.steps.length) error = 'Add at least one push';
   else if (!pushes.length) error ??= 'No push reaches a part: lower one, or make it cover the whole plate';
-  return { yEnd, pushes, warn, error };
+  return { yEnd, pushes, error };
 }
 const WHERE_TEXT = { parts: 'where it reaches parts', plate: 'whole plate', x: 'one position' };
 
@@ -874,10 +877,9 @@ function update() {
   drawSide();
   const fileHeight = info && !info.error && info.height > 0;
   $('sweepFor').textContent = fileHeight ? `For this file's tallest part, ${mm(info.height)}.` : `Shown for an example ${EXAMPLE_HEIGHT} mm part until you drop a file.`;
-  const layout = info && !info.error ? info.layout : null;
-  const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings, layout);
+  const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings);
   $('sweepNote').textContent = warn.length ? warn.join(' ') : settings.custom
-    ? 'Pushes run in the order of the list. "Where it reaches parts" covers the columns whose parts stand taller than the push; "Whole plate" covers every column, from the back edge where it is empty.'
+    ? 'Pushes run in the order of the list. Once a push has hit a part, the later ones take it as gone. A push is only refused when its gantry would hit a part no earlier push has touched.'
     : `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
   $('sweepNote').style.color = warn.length ? 'var(--warn)' : '';
   const facts = $('facts');
