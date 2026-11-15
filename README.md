@@ -48,7 +48,7 @@ El archivo no sale de tu ordenador.
   que empujan. Las medidas de la pala y del pórtico son fijas.
 - Vista lateral de las pasadas y un visor 3D que reproduce el G-code real del ciclo. Las piezas se dibujan con su
   forma real (los perímetros exteriores de cada capa, leídos del G-code). Con la animación parada, cada pasada es un
-  anillo alrededor de la pieza a la altura donde la golpea la pala, y una flecha a esa misma altura muestra por dónde
+  anillo con el contorno real de la pieza a la altura donde la golpea la pala, y una flecha a esa misma altura muestra por dónde
   empuja; al mover un empuje se resalta con el ancho de la pala, y en rojo los que se rechazan.
 
 ## Sin probar en una impresora

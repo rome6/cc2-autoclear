@@ -1115,7 +1115,7 @@ function render() {
   const reach = Y_BACK - v.scoop_ahead;
   faces.push({ pts: [[0, reach, 0.05], [PLATE, reach, 0.05], [PLATE, Y_BACK, 0.05], [0, Y_BACK, 0.05]], color: css('--bad'), alpha: 0.35, flat: true });
   faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
-  // Paused: the parts go see-through and each sweep that reaches a part is a ring around it, at the
+  // Paused: the parts go see-through and each sweep that reaches a part is a ring around it, its own outline at the
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
   const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !settings.custom), rings = [];
   if (showRings) {
@@ -1128,8 +1128,13 @@ function render() {
       if (state.shift[i].gone) return;
       const px0 = Math.min(...p.points.map(q => q[0])), px1 = Math.max(...p.points.map(q => q[0]));
       levelsShown.forEach((l, k) => {
-        if ((l.low || p.h > l.z) && px1 > l.x0 && px0 < l.x1)
-          rings.push({ pts: p.points.map(q => [q[0], q[1] + state.shift[i].dy, Math.min(l.z, p.h)]), n: k + 1 });
+        if (!((l.low || p.h > l.z) && px1 > l.x0 && px0 < l.x1)) return;
+        // The part's own outline at that height: the outer walls of the nearest printed layer, or its footprint.
+        const z = Math.min(l.z, p.h), dy = state.shift[i].dy;
+        let paths = [p.points.flat()];
+        if (p.layers && p.layers.length)
+          paths = p.layers.reduce((best, x) => (Math.abs(x.z - z) < Math.abs(best.z - z) ? x : best)).paths;
+        rings.push({ paths: paths.map(q => { const out = []; for (let j = 0; j < q.length; j += 2) out.push([q[j], q[j + 1] + dy, z]); return out; }), n: k + 1 });
       });
     });
   }
@@ -1194,11 +1199,9 @@ function render() {
   }
   ctx.lineWidth = 2; ctx.strokeStyle = css('--scoop');
   for (const r of rings) {
-    const q = r.pts.map(P);
     ctx.globalAlpha = view.focus < 0 || !settings.custom || r.n === view.focus + 1 ? 1 : 0.2;
     ctx.beginPath();
-    q.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-    ctx.closePath();
+    for (const path of r.paths) path.map(P).forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
