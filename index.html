@@ -124,7 +124,7 @@ details.advanced details { margin: 8px; }
       <h2 class="step">2. Sweeps</h2>
       <p class="hint" id="sweepFor"></p>
       <div class="seg" id="sweepMode" role="group" aria-label="How the sweeps are planned">
-        <button data-mode="auto">Automatic</button><button data-mode="custom">Custom pushes</button>
+        <button data-mode="complete" title="Every column at every height: clears the whole plate">Complete</button><button data-mode="auto" title="The same heights, pushing at the centre of each part's layer">Automatic</button><button data-mode="manual" title="Your own list of pushes">Manual</button>
       </div>
       <div class="sweeps">
         <svg id="sideView" viewBox="0 0 280 230" role="img" aria-label="Side view of the sweep levels against the part"></svg>
@@ -134,7 +134,7 @@ details.advanced details { margin: 8px; }
           <div id="steps" class="steps"></div>
           <div class="steps-add row">
             <button id="addStep">+ Add push</button>
-            <button id="fromAuto" title="Replace the list with the automatic sweeps for this part">Start from the automatic plan</button>
+            <button id="fromAuto" title="Replace the list with what the Automatic mode does for this part">Start from Automatic</button>
           </div>
         </div>
         </div>
@@ -208,7 +208,7 @@ details.advanced details { margin: 8px; }
 
 <script>
 // CORE-BEGIN: the same rules as CC2 Control's src/bed_clear.h, so both produce the same G-code. The custom
-// pushes (s.custom) are this page's own.
+// pushes (the 'auto' and 'manual' modes) are this page's own.
 const MARK = 'CC2 Control automatic removal';
 const FARMLOOP_MARK = 'FarmLoop CC2';
 const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
@@ -262,7 +262,7 @@ function defaults() {
   const v = {};
   for (const [key, value] of FIELDS) v[key] = value;
   v.bend_before_z = v.bend_touch_z - BEND_APPROACH;
-  return { v, bendOnly: false, travel: 'normal', push: 'normal', custom: false, steps: [] };
+  return { v, bendOnly: false, travel: 'normal', push: 'normal', mode: 'complete', steps: [] };
 }
 // The feed rates of a speed profile into the settings.
 function applySpeeds(s) {
@@ -309,7 +309,7 @@ function layoutBack(layout) {
 // Allowed, but worth knowing: gaps between sweeps taller than the scoop leave a band of the part that no
 // sweep touches, and if a part stays stuck the next, lower sweep can drive the gantry into it.
 function warnings(height, s) {
-  if (s.custom) return []; // custom pushes only refuse (customPlan)
+  if (usesPushes(s)) return []; // push lists only refuse (customPlan)
   const v = s.v, passes = passesOf(height, s), out = [];
   for (let k = 1; k < passes.length; k++) {
     const gap = passes[k - 1] - passes[k];
@@ -332,12 +332,12 @@ function refusal(height, back, s, sweep, layout) {
   if (!(v.bend_before_z < v.bend_touch_z && v.bend_touch_z < v.bend_bottom_z))
     return 'The bender heights must rise from the fast move to the touch point to the bottom';
   if (!sweep) return null;
-  if (!s.custom && height >= passesOf(height, s)[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
+  if (!usesPushes(s) && height >= passesOf(height, s)[0] + v.gantry_low) return 'The first sweep would drive the gantry into the part';
   if (v.scoop_high <= v.scoop_low) return "The scoop's top edge must be above its bottom edge";
   if (Y_BACK - v.scoop_ahead <= Y_FRONT) return 'The scoop has no travel in Y';
   if (back > Y_BACK - v.scoop_ahead) return 'A part stands at the back of the plate, behind where the scoop starts';
   if (v.scoop_width <= v.column_overlap) return 'The column overlap must be smaller than the scoop';
-  return s.custom ? customPlan(height, layout, s).error : null;
+  return usesPushes(s) ? customPlan(height, layout, s).error : null;
 }
 // Height under each column (0: empty) and the furthest-back Y there. Without a layout every column
 // holds the tallest part up to the back edge; a part of unknown height counts as the tallest.
@@ -378,6 +378,17 @@ function stepValid(st) {
     && !!SPEEDS.push[st.speed];
 }
 // The automatic levels as a custom list: the starting point of the editor.
+// The sweep modes: 'complete' sweeps every column at every level (sweepPlan); 'auto' takes the same levels
+// as a push list, pushing at each part's layer centre above the plate and over the columns with parts at it;
+// 'manual' runs the user's own list (s.steps).
+const SWEEP_MODES = ['complete', 'auto', 'manual'];
+const usesPushes = s => s.mode === 'auto' || s.mode === 'manual';
+function autoSteps(height, s) {
+  const steps = stepsFromAuto(height, s);
+  steps.forEach((st, k) => { if (k < steps.length - 1) st.where = 'centre'; });
+  return steps;
+}
+const stepsOf = (height, s) => (s.mode === 'auto' ? autoSteps(height, s) : s.steps);
 function stepsFromAuto(height, s) {
   const passes = passesOf(height, s), last = passes.length - 1, slower = { fast: 'normal', normal: 'slow', slow: 'slow' };
   return passes.map((d, k) => ({ h: Math.round((d + s.v.scoop_low) * 10) / 10, where: 'parts', x: PLATE / 2,
@@ -392,7 +403,8 @@ function customPlan(height, layout, s) {
   const parts = layout && layout.length ? layout.map(o => ({ x0: o.x0, x1: o.x1, h: o.height > 0 ? Math.min(o.height, height) : height, slices: o.slices }))
     : [{ x0: X_MIN, x1: X_MAX, h: height }];
   let error = null;
-  s.steps.forEach((st, k) => {
+  const steps = stepsOf(height, s);
+  steps.forEach((st, k) => {
     const d = st.h - v.scoop_low;
     if (d < 0.2) { error ??= `Push ${k + 1} is lower than the scoop can go`; return; }
     const hitNow = [];
@@ -414,9 +426,9 @@ function customPlan(height, layout, s) {
     });
     for (const i of hitNow) touched.add(i);
   });
-  if (!s.steps.length) error = 'Add at least one push';
+  if (!steps.length) error = 'Add at least one push';
   else if (!pushes.length) error ??= 'No push reaches a part: lower one, or make it cover the whole plate';
-  return { yEnd, pushes, error };
+  return { yEnd, pushes, error, steps };
 }
 // The X centre of a part's layer nearest a height, or of its footprint.
 function centreAt(o, z) {
@@ -476,16 +488,16 @@ function cycle(height, layout, s, sweep) {
     line(`; ==== end ${MARK} ====`);
     return out.join('\n') + '\n';
   }
-  if (s.custom) {
+  if (usesPushes(s)) {
     // Each push ends with the bed down far enough to clear every part, as any of them may still stand.
-    const plan = customPlan(height, layout, s);
-    line(`; --- sweep: ${s.steps.length} custom push step(s), ${plan.pushes.length} push(es) in all ---`);
+    const plan = customPlan(height, layout, s), steps = plan.steps;
+    line(`; --- sweep: ${steps.length} ${s.mode} push step(s), ${plan.pushes.length} push(es) in all ---`);
     line(`G1 Z${fixed(up, 1)} F${zFast} ; plate up first, the parts just under the scoop, toolhead over the bin`);
     let step = -1;
     for (const p of plan.pushes) {
       if (p.step !== step) {
-        const st = s.steps[(step = p.step)];
-        line(`; pass ${step + 1}/${s.steps.length}: scoop ${fixed(st.h, 1)} mm above the plate, ${st.where === 'x' ? `at X ${fixed(p.x, 1)}` : WHERE_TEXT[st.where]}, ${st.n}x, ${st.speed}`);
+        const st = steps[(step = p.step)];
+        line(`; pass ${step + 1}/${steps.length}: scoop ${fixed(st.h, 1)} mm above the plate, ${st.where === 'x' ? `at X ${fixed(p.x, 1)}` : WHERE_TEXT[st.where]}, ${st.n}x, ${st.speed}`);
       }
       const x = Math.min(Math.max(p.x - v.scoop_offset_x, X_MIN), X_MAX);
       line(`G1 X${fixed(x, 1)} Y${fixed(p.yStart, 1)} F${int(v.f_travel)} ; column at X ${fixed(p.x, 1)}`);
@@ -684,14 +696,14 @@ function load() {
     for (const [key] of FIELDS) if (!FIXED_KEYS.has(key) && valueValid(key, saved.v?.[key])) s.v[key] = saved.v[key];
     if (SPEEDS.travel[saved.travel]) s.travel = saved.travel;
     if (SPEEDS.push[saved.push]) s.push = saved.push;
-    s.custom = saved.custom === true;
+    s.mode = SWEEP_MODES.includes(saved.mode) ? saved.mode : saved.custom === true ? 'manual' : 'complete';
     if (Array.isArray(saved.steps)) s.steps = saved.steps.filter(stepValid).slice(0, STEPS_MAX);
   } catch {}
   s.v.bend_before_z = s.v.bend_touch_z - BEND_APPROACH;
   return applySpeeds(s);
 }
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push, custom: settings.custom, steps: settings.steps })); } catch {}
+  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push, mode: settings.mode, steps: settings.steps })); } catch {}
 }
 let settings = load(), source = null, info = null, fileName = '';
 const $ = id => document.getElementById(id);
@@ -858,7 +870,8 @@ function buildSliders() {
 // The side view next to the sliders: the part, each sweep's scoop at its height and the gantry of the first one.
 function drawSide() {
   const v = settings.v, h = partHeight(), W = 280, H = 230, base = 205, left = 34;
-  const passes = settings.custom && settings.steps.length ? settings.steps.map(st => st.h - v.scoop_low) : levels();
+  const steps = usesPushes(settings) ? stepsOf(h, settings) : [];
+  const passes = steps.length ? steps.map(st => st.h - v.scoop_low) : levels();
   const top = Math.max(h, ...passes.map(d => d + v.gantry_low)) + 12, k = (base - 14) / top, Y = z => base - z * k;
   const out = [];
   out.push(`<line x1="${left - 6}" y1="${base}" x2="${W - 8}" y2="${base}" stroke="var(--muted)" stroke-width="2"/>`);
@@ -867,7 +880,7 @@ function drawSide() {
   out.push(`<rect x="150" y="${Y(h)}" width="80" height="${h * k}" rx="2" fill="var(--part)" fill-opacity=".75"/>`);
   out.push(`<text x="190" y="${Math.min(Y(h) + 14, base - 4)}" text-anchor="middle" font-size="10" fill="#fff">${mm(h)}</text>`);
   const g = Y(passes[0] + v.gantry_low);
-  out.push(`<rect x="${left}" y="${g - 6}" width="${W - left - 8}" height="6" fill="var(--head)" fill-opacity=".6"/><text x="${W - 10}" y="${g - 9}" text-anchor="end" font-size="9" fill="var(--muted)">gantry, ${settings.custom ? 'push 1' : '1st sweep'}</text>`);
+  out.push(`<rect x="${left}" y="${g - 6}" width="${W - left - 8}" height="6" fill="var(--head)" fill-opacity=".6"/><text x="${W - 10}" y="${g - 9}" text-anchor="end" font-size="9" fill="var(--muted)">gantry, ${steps.length ? 'push 1' : '1st sweep'}</text>`);
   passes.forEach((d, i) => {
     const x = 120 - i * 12, y0 = Y(d + v.scoop_high), y1 = Y(d + v.scoop_low);
     out.push(`<rect x="${x}" y="${y0}" width="10" height="${y1 - y0}" fill="var(--scoop)" fill-opacity=".45" stroke="var(--scoop)"/>`);
@@ -889,7 +902,9 @@ function update() {
   const fileHeight = info && !info.error && info.height > 0;
   $('sweepFor').textContent = fileHeight ? `For this file's tallest part, ${mm(info.height)}.` : `Shown for an example ${EXAMPLE_HEIGHT} mm part until you drop a file.`;
   const n = levels().length, warn = settings.bendOnly ? [] : warnings(partHeight(), settings);
-  $('sweepNote').textContent = warn.length ? warn.join(' ') : settings.custom
+  $('sweepNote').textContent = warn.length ? warn.join(' ') : settings.mode === 'auto'
+    ? `${n} push${n === 1 ? '' : 'es'} at the heights of these sliders, top down. Above the plate each one pushes once at the centre of each part's layer at that height; the last one, at the plate, covers every column with parts.`
+    : settings.mode === 'manual'
     ? 'Pushes run in the order of the list. Once a push has hit a part, the later ones take it as gone. A push is only refused when its gantry would hit a part no earlier push has touched.'
     : `${n} sweep${n === 1 ? '' : 's'} in height, top down; each column of the plate only gets the ones that reach its own parts.`;
   $('sweepNote').style.color = warn.length ? 'var(--warn)' : '';
@@ -905,7 +920,7 @@ function update() {
   add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');
   const sweep = !settings.bendOnly, why = refusal(info.height, layoutBack(info.layout), settings, sweep, info.layout);
   if (why) { setStatus('bad', 'Cannot clear this plate: ' + why); return; }
-  if (sweep && settings.custom) add(`${customPlan(info.height, info.layout, settings).pushes.length} pushes in all, from ${settings.steps.length} step${settings.steps.length === 1 ? '' : 's'} of the list.`);
+  if (sweep && usesPushes(settings)) add(`${customPlan(info.height, info.layout, settings).pushes.length} pushes in all${settings.mode === 'manual' ? `, from ${settings.steps.length} step${settings.steps.length === 1 ? '' : 's'} of the list` : ''}.`);
   else if (sweep) {
     const plan = sweepPlan(info.height, info.layout, settings), last = plan.passes.length - 1;
     const pushes = plan.passes.reduce((n, d, k) => n + plan.columns.filter(c => c.under > 0 && (k === last || c.under > d + settings.v.scoop_low)).length
@@ -1128,12 +1143,13 @@ function render() {
   faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
   // Paused: the parts go see-through and each sweep that reaches a part is a ring around it, its own outline at the
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
-  const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !settings.custom), rings = [];
+  const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !usesPushes(settings)), rings = [];
   if (showRings) {
     // Each level: the scoop's bottom edge above the plate, and the X span it covers (all of it but for one-position pushes).
-    const half = v.scoop_width / 2, lowest = settings.custom ? Math.min(...settings.steps.map(st => st.h)) : 0;
-    const levelsShown = settings.custom
-      ? settings.steps.map(st => ({ z: st.h, x0: st.where === 'x' ? st.x - half : -1e9, x1: st.where === 'x' ? st.x + half : 1e9, low: st.h === lowest }))
+    const steps = usesPushes(settings) ? stepsOf(info.height, settings) : null;
+    const half = v.scoop_width / 2, lowest = steps ? Math.min(...steps.map(st => st.h)) : 0;
+    const levelsShown = steps
+      ? steps.map(st => ({ z: st.h, x0: st.where === 'x' ? st.x - half : -1e9, x1: st.where === 'x' ? st.x + half : 1e9, low: st.h === lowest }))
       : passesOf(info.height, settings).map((d, k, all) => ({ z: d + v.scoop_low, x0: -1e9, x1: 1e9, low: k === all.length - 1 }));
     film.parts.forEach((p, i) => {
       if (state.shift[i].gone) return;
@@ -1210,7 +1226,7 @@ function render() {
   }
   ctx.lineWidth = 2; ctx.strokeStyle = css('--scoop');
   for (const r of rings) {
-    ctx.globalAlpha = view.focus < 0 || !settings.custom || r.n === view.focus + 1 ? 1 : 0.2;
+    ctx.globalAlpha = view.focus < 0 || settings.mode !== 'manual' || r.n === view.focus + 1 ? 1 : 0.2;
     ctx.beginPath();
     for (const path of r.paths) path.map(P).forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
     ctx.stroke();
@@ -1229,7 +1245,7 @@ function render() {
       if (!a.steps.includes(n)) a.steps.push(n);
       a.bad = a.bad || bad;
     };
-    if (settings.custom)
+    if (usesPushes(settings))
       for (const q of customPlan(info.height, info.layout, settings).pushes) arrow(q.x, q.yStart - v.scoop_ahead, q.d + v.scoop_low, q.step + 1, q.hits);
     else {
       const plan = sweepPlan(info.height, info.layout, settings), last = plan.passes.length - 1;
@@ -1238,7 +1254,7 @@ function render() {
           if (c.under > 0 && (k === last || c.under > d + v.scoop_low)) arrow(c.x, c.yStart - v.scoop_ahead, d + v.scoop_low, k + 1, false);
       });
     }
-    const y1 = -v.past_edge, accent = css('--scoop'), bad = css('--bad'), focused = view.focus >= 0 && settings.custom;
+    const y1 = -v.past_edge, accent = css('--scoop'), bad = css('--bad'), focused = view.focus >= 0 && settings.mode === 'manual';
     for (const a of at.values()) {
       const on = !focused || a.steps.includes(view.focus + 1), color = a.bad ? bad : accent;
       ctx.globalAlpha = on ? 1 : 0.2;
@@ -1283,7 +1299,7 @@ function render() {
   ctx.fillText('door', door[0], door[1] + 10);
   const seg = state.seg;
   $('phase').textContent = !film ? 'Drop a file to see its cycle' : film.still ? 'This plan is refused: the message on the left says why (red arrows)' : seg ? `${seg.phase}${hz0 > 150 ? ` · plate ${hz0.toFixed(0)} mm under the nozzle` : ''}` : 'End of the print';
-  $('gline').textContent = showRings && view.t === 0 ? `Arrows: where and at what height it pushes; rings: where the scoop meets the parts.${settings.custom ? ' Touch a push to pick it out.' : ''} Press play to watch it.`
+  $('gline').textContent = showRings && view.t === 0 ? `Arrows: where and at what height it pushes; rings: where the scoop meets the parts.${settings.mode === 'manual' ? ' Touch a push to pick it out.' : ''} Press play to watch it.`
     : seg ? seg.line : film && film.guess ? 'No object labels: a block stands in for the parts' : '';
   const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   $('clock').textContent = film ? `${clock(view.t)} / ${clock(film.total)}` : '0:00 / 0:00';
@@ -1446,14 +1462,14 @@ function renderSteps() {
   $('addStep').disabled = settings.steps.length >= STEPS_MAX;
 }
 function renderMode() {
-  document.querySelectorAll('#sweepMode button').forEach(b => b.classList.toggle('on', (b.dataset.mode === 'custom') === settings.custom));
-  $('sweepSliders').hidden = settings.custom;
-  $('stepEditor').hidden = !settings.custom;
+  document.querySelectorAll('#sweepMode button').forEach(b => b.classList.toggle('on', b.dataset.mode === settings.mode));
+  $('sweepSliders').hidden = settings.mode === 'manual';
+  $('stepEditor').hidden = settings.mode !== 'manual';
 }
 document.querySelectorAll('#sweepMode button').forEach(b => b.addEventListener('click', () => {
-  settings.custom = b.dataset.mode === 'custom';
+  settings.mode = b.dataset.mode;
   view.focus = -1;
-  if (settings.custom && !settings.steps.length) settings.steps = stepsFromAuto(partHeight(), settings);
+  if (settings.mode === 'manual' && !settings.steps.length) settings.steps = autoSteps(partHeight(), settings);
   renderSteps(); save(); update();
 }));
 $('addStep').addEventListener('click', () => {
@@ -1461,7 +1477,7 @@ $('addStep').addEventListener('click', () => {
   settings.steps.push({ h: Math.ceil((v.push_z + v.scoop_low) * 2) / 2, where: 'parts', x: PLATE / 2, n: 1, speed: settings.push });
   renderSteps(); save(); update();
 });
-$('fromAuto').addEventListener('click', () => { settings.steps = stepsFromAuto(partHeight(), settings); renderSteps(); save(); update(); });
+$('fromAuto').addEventListener('click', () => { settings.steps = autoSteps(partHeight(), settings); renderSteps(); save(); update(); });
 $('copies').addEventListener('input', update);
 $('reset').addEventListener('click', () => { settings = applySpeeds(defaults()); save(); renderFields(); renderSteps(); update(); });
 $('showCycle').addEventListener('click', () => { $('cycle').hidden = !$('cycle').hidden; });

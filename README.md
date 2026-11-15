@@ -37,11 +37,15 @@ El archivo no sale de tu ordenador.
   placa); si la separación deja al pórtico sin margen ante una pieza que no se suelte, lo avisa en naranja.
 - La pieza más alta la marca el doblador: antes de doblar, la cama baja rápido hasta 10 mm antes del punto de
   contacto de la pestaña, y la pieza tiene que caber ahí bajo la boquilla con el margen.
-- **Empujes a medida:** en lugar de las pasadas automáticas, una lista de empujes que se ejecutan en orden.
+- **Tres modos de barrido:**
+  - **Completo:** todas las columnas a todas las alturas; limpia la placa entera (el modo de siempre).
+  - **Automático:** las mismas alturas de los deslizadores, pero por encima de la placa cada pasada empuja una sola
+    vez en el centro de la capa de cada pieza a esa altura; la última, a ras de placa, cubre las columnas con piezas.
+  - **Manual:** tu propia lista de empujes («Empezar desde Automático» la rellena con lo que haría ese modo).
+- **Empujes a medida (modo Manual):** una lista de empujes que se ejecutan en orden.
   Cada uno tiene su altura de la pala sobre la placa, dónde empuja (las columnas donde llega a piezas, el centro de la capa
   de cada pieza a esa altura, toda la placa o una sola posición X), cuántas veces y a qué velocidad. Una pieza que ya ha golpeado un empuje anterior se da por
-  retirada; solo rechaza un empuje cuyo pórtico chocaría con una pieza que ningún empuje anterior ha tocado. «Empezar desde el plan automático» copia las pasadas automáticas
-  como punto de partida.
+  retirada; solo rechaza un empuje cuyo pórtico chocaría con una pieza que ningún empuje anterior ha tocado. 
 - **Prueba de espera de temperatura:** descarga un G-code que no mueve nada; calienta la cama a 45 °C y la deja
   enfriar probando `TEMPERATURE_WAIT` y `M190`, para ver en el log de la impresora cuál espera de verdad.
 - Velocidades por perfiles (lento, conservador, rápido), uno para los movimientos que no empujan y otro para los
