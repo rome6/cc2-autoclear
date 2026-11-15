@@ -368,8 +368,9 @@ function sweepPlan(height, layout, s) {
 }
 
 // ---- custom pushes: a list run in order, each at one height (the scoop's bottom edge above the plate)
-// over the columns with parts it reaches, every column, or one X; n times, at a push speed profile ----
-const STEP_WHERE = ['parts', 'plate', 'x'], STEPS_MAX = 12;
+// over the columns with parts it reaches, the X centre of each part it reaches, every column, or one X;
+// n times, at a push speed profile ----
+const STEP_WHERE = ['parts', 'centre', 'plate', 'x'], STEPS_MAX = 12;
 function stepValid(st) {
   return !!st && Number.isFinite(st.h) && st.h >= 0.5 && st.h <= 255 && STEP_WHERE.includes(st.where)
     && Number.isFinite(st.x) && st.x >= 0 && st.x <= PLATE && Number.isInteger(st.n) && st.n >= 1 && st.n <= 5
@@ -394,15 +395,18 @@ function customPlan(height, layout, s) {
     const d = st.h - v.scoop_low;
     if (d < 0.2) { error ??= `Push ${k + 1} is lower than the scoop can go`; return; }
     const hitNow = [];
-    const xs = st.where === 'x' ? [Math.min(Math.max(st.x, half), PLATE - half)] : columnsOf(s);
+    const clampX = x => Math.min(Math.max(x, half), PLATE - half), atPlate = d <= v.push_z + 3;
+    const xs = st.where === 'x' ? [clampX(st.x)]
+      : st.where === 'centre' ? [...new Set(parts.filter(o => o.h > st.h || atPlate).map(o => clampX((o.x0 + o.x1) / 2)))]
+      : columnsOf(s);
     columnHeights(height, layout, s, xs).forEach((c, i) => {
       const x = xs[i];
-      if (st.where === 'parts' && !(c.under > 0 && (c.under > st.h || d <= v.push_z + 3))) return;
+      if (st.where === 'parts' && !(c.under > 0 && (c.under > st.h || atPlate))) return;
       const inColumn = parts.map((o, i) => i).filter(i => parts[i].x1 > x - half && parts[i].x0 < x + half);
       const tall = inColumn.filter(i => parts[i].h >= d + v.gantry_low), hits = tall.some(i => !touched.has(i));
       if (hits)
         error ??= `Push ${k + 1} at X ${fixed(x, 1)}: the gantry would hit a part no earlier push has touched. Add a higher push on it first`;
-      for (const i of inColumn) if (parts[i].h > st.h || d <= v.push_z + 3) hitNow.push(i);
+      for (const i of inColumn) if (parts[i].h > st.h || atPlate) hitNow.push(i);
       const from = c.under > 0 ? c.back + BEHIND + v.scoop_ahead : Y_BACK;
       for (let r = 0; r < st.n; r++)
         pushes.push({ step: k, x, d, feed: SPEEDS.push[st.speed].f_push, yStart: Math.max(Math.min(from, Y_BACK), yEnd), hits });
@@ -413,7 +417,7 @@ function customPlan(height, layout, s) {
   else if (!pushes.length) error ??= 'No push reaches a part: lower one, or make it cover the whole plate';
   return { yEnd, pushes, error };
 }
-const WHERE_TEXT = { parts: 'where it reaches parts', plate: 'whole plate', x: 'one position' };
+const WHERE_TEXT = { parts: 'where it reaches parts', centre: "at each part's centre", plate: 'whole plate', x: 'one position' };
 
 function cycle(height, layout, s, sweep) {
   if (refusal(height, layoutBack(layout), s, sweep, layout)) return null;
@@ -1373,7 +1377,7 @@ $('drop').addEventListener('drop', e => e.dataTransfer.files[0] && open(e.dataTr
 $('bendOnly').addEventListener('change', update);
 
 // ---- custom pushes editor ----
-const WHERE_NAMES = { parts: 'Where parts are', plate: 'Whole plate', x: 'One position' };
+const WHERE_NAMES = { parts: 'Where parts are', centre: 'Part centre', plate: 'Whole plate', x: 'One position' };
 function segHtml(names, on, attr) {
   return `<div class="seg sm" data-${attr}>${Object.entries(names).map(([id, name]) => `<button type="button" data-id="${id}" class="${id === on ? 'on' : ''}">${name}</button>`).join('')}</div>`;
 }
