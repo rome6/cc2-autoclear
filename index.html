@@ -1204,7 +1204,8 @@ function render() {
   ctx.globalAlpha = 1;
   // Paused: an arrow for every push, at the height of the scoop's bottom edge, from where its face starts to
   // past the front edge, with a dashed drop to the plate; red where refused.
-  // The push being edited stands out with the scoop's width.
+  // Each push is a see-through sheet the scoop's width at its height, so the levels read as layers in 3D; the
+  // push being edited stands out and the rest fade.
   if (showRings) {
     const at = new Map(), arrow = (x, y0, z, n, bad) => {
       const key = `${x.toFixed(1)}:${z.toFixed(1)}`;
@@ -1227,10 +1228,11 @@ function render() {
     for (const a of at.values()) {
       const on = !focused || a.steps.includes(view.focus + 1), color = a.bad ? bad : accent;
       ctx.globalAlpha = on ? 1 : 0.2;
-      if (on && focused) { // the scoop's width along the push
+      { // the scoop's width along the push
         const band = [[a.x - v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, a.y0], [a.x + v.scoop_width / 2, y1], [a.x - v.scoop_width / 2, y1]].map(q => P([q[0], q[1], a.z]));
-        ctx.fillStyle = shade(color, 1, 0.18); ctx.beginPath();
-        band.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = shade(color, 1, on && focused ? 0.3 : 0.12); ctx.strokeStyle = shade(color, 1, 0.5); ctx.lineWidth = 1;
+        ctx.beginPath(); band.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath();
+        ctx.fill(); ctx.stroke();
       }
       const s = P([a.x, a.y0, a.z]), e = P([a.x, y1, a.z]), ang = Math.atan2(e[1] - s[1], e[0] - s[0]);
       ctx.strokeStyle = ctx.fillStyle = color;
