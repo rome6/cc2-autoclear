@@ -660,13 +660,20 @@ function detectFirmware(text) {
   const startAt = text.indexOf('; EXECUTABLE_BLOCK_START');
   return startAt >= 0 && findLine(text, startAt, Math.min(text.length, startAt + PURGE_SPAN), 'PRINT_START', false) >= 0 ? 'cosmos' : 'stock';
 }
-// COSMOS: PRINT_START purges on the plate when cosmos.conf has adaptive_purge on, so it should be off; right
-// after PRINT_START, COSMOS's own PURGE primes the nozzle over the bin and wipes it.
+// COSMOS: PRINT_START purges on the plate when cosmos.conf has adaptive_purge on. For this file only, the
+// setting is turned off around PRINT_START (it is read there, and cosmos.conf restores it at the next boot)
+// and turned back on after it, so other prints keep their purge; then COSMOS's own PURGE primes the nozzle
+// over the bin and wipes it.
+const PURGE_SETTING = 'SET_GCODE_VARIABLE MACRO=_COSMOS_SETTINGS VARIABLE=adaptive_purge VALUE=';
 function cosmosPurge(text, body, limit) {
   const start = findLine(text, body, limit, 'PRINT_START', false);
   if (start < 0) return null;
   const at = lineEnd(text, start, limit);
-  return { start: at, end: at, text: `; ${MARK}: prime over the bin, off the plate the scoop sweeps (adaptive_purge off in cosmos.conf)\nPURGE\n` };
+  return {
+    start, end: at,
+    text: `; ${MARK}: no purge line on the plate the scoop sweeps, for this print only\n${PURGE_SETTING}False\n`
+      + text.slice(start, at) + `${PURGE_SETTING}True\n; ${MARK}: prime over the bin instead\nPURGE\n`,
+  };
 }
 
 // Everything the page shows and the download needs, or { error }.
@@ -987,7 +994,7 @@ function update() {
   if (info.layout) add(`Parts: ${info.layout.map(o => `${o.name.replace(/\.stl_id_\d+_copy_\d+$/, '')} (${o.height > 0 ? o.height.toFixed(1) : '?'} mm)`).join(', ')}`);
   else add('No object labels in the file (turn on "Label objects" in OrcaSlicer): every column is swept for the tallest part.');
   if (settings.fw === 'cosmos') {
-    add(info.purge ? 'After PRINT_START: PURGE primes the nozzle over the bin. Set adaptive_purge = False in cosmos.conf, or PRINT_START also purges on the plate.'
+    add(info.purge ? 'Purge: adaptive_purge is turned off for this print\'s PRINT_START and back on after it, then PURGE primes the nozzle over the bin. cosmos.conf is not touched.'
       : 'No PRINT_START line: the start is left as it is.');
     add(`Cooling: TEMPERATURE_WAIT holds until the bed is at ${int(settings.v.release_bed_temp)} °C; the cycle goes right before PRINT_END.`);
   } else add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');

@@ -42,8 +42,9 @@ Un selector elige el firmware del archivo; al cargar uno se elige solo (los perf
     llegue a la temperatura de despegue, sin `G4` calculado. El mínimo de enfriado, si se pone, sigue siendo un `G4`.
   - **Final:** el ciclo va justo antes de `PRINT_END`, que se queda: aparca, limpia la boquilla y apaga los motores.
     El ciclo no lleva `M84`.
-  - **Purga:** después de `PRINT_START` se añade `PURGE`, la purga de COSMOS en el cubilete (y limpieza de boquilla).
-    Pon `adaptive_purge = False` en `cosmos.conf`; si no, `PRINT_START` también purga sobre la placa.
+  - **Purga:** solo para ese archivo, desactiva `adaptive_purge` justo antes de `PRINT_START` (para que no dibuje
+    la línea sobre la placa) y lo vuelve a activar después; luego `PURGE`, la purga de COSMOS en el cubilete (y
+    limpieza de boquilla). No hace falta tocar `cosmos.conf`: las impresiones sin procesar siguen purgando como siempre.
   - **Cubilete:** la posición de `MOVE_TO_TRAY` de COSMOS (X 52,5, Y 264, entrando desde Y 255).
   - **Solo el ciclo** no está disponible: `PRINT_END` apaga los motores y un archivo aparte no podría empezar sin
     hacer home. Usa el archivo procesado (o las copias).
