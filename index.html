@@ -108,7 +108,7 @@ details.advanced details { margin: 8px; }
 <body>
 <main>
   <h1>CC2 Auto Clear</h1>
-  <p class="lead">Adds the bed-clearing cycle to an ELEGOO Centauri Carbon 2 G-code: the purge line goes into the bin, and the print ends by cooling the bed, flexing the plate and sweeping the parts off the front. Everything runs in this page; your file never leaves the computer.</p>
+  <p class="lead">Adds the bed-clearing cycle to an ELEGOO Centauri Carbon 2 G-code, for the stock firmware or OpenCentauri COSMOS: the purge goes into the bin, and the print ends by cooling the bed, flexing the plate and sweeping the parts off the front. Everything runs in this page; your file never leaves the computer.</p>
 
   <div class="grid">
     <section class="card">
@@ -118,6 +118,10 @@ details.advanced details { margin: 8px; }
         <div id="fileName" class="hint"></div>
       </div>
       <input id="file" type="file" accept=".gcode,.gco,.g" hidden>
+      <div class="seg" id="firmware" role="group" aria-label="Printer firmware" style="margin-top:10px">
+        <button data-fw="stock" title="ELEGOO's firmware (or Community): timed cooling, the cycle in place of the end G-code's M84">Stock firmware</button><button data-fw="cosmos" title="OpenCentauri COSMOS: waits for the bed's temperature, the cycle right before PRINT_END">COSMOS</button>
+      </div>
+      <p class="hint" id="fwNote"></p>
       <div id="status"></div>
       <ul id="facts" class="facts"></ul>
 
@@ -213,6 +217,12 @@ const MARK = 'CC2 Control automatic removal';
 const FARMLOOP_MARK = 'FarmLoop CC2';
 const PLATE = 256, Y_FRONT = 0, Y_BACK = 256, X_MIN = 0, X_MAX = 256;
 const BIN_X = 51, BIN_Y = 264, BIN_Y_ENTRY = 257; // ELEGOO's own flush position (printer_dsp.cfg)
+// The firmware the file is for. COSMOS (OpenCentauri's Klipper/Kalico) honors TEMPERATURE_WAIT, so its cooling
+// waits for the bed itself; its print ends with the PRINT_END macro, which turns the motors off, so the cycle
+// goes right before it. Its bin is MOVE_TO_TRAY's X 52.5 Y 264, approached from Y 255.
+const FIRMWARES = ['stock', 'cosmos'];
+const BINS = { stock: { x: BIN_X, y: BIN_Y, entry: BIN_Y_ENTRY }, cosmos: { x: 52.5, y: 264, entry: 255 } };
+const binOf = fw => BINS[fw] || BINS.stock;
 const BEHIND = 10; // a column's push starts with the scoop this far behind its parts
 const TOP_Z = 3; // the bed's highest point while the toolhead waits over the bin
 const BEND_APPROACH = 10; // the bed comes down fast to this far above the bender's touch point
@@ -272,7 +282,7 @@ function defaults() {
   const v = {};
   for (const [key, value] of FIELDS) v[key] = value;
   v.bend_before_z = v.bend_touch_z - BEND_APPROACH;
-  return { v, bendOnly: false, travel: 'normal', push: 'normal', mode: 'complete', steps: [] };
+  return { v, bendOnly: false, travel: 'normal', push: 'normal', mode: 'complete', steps: [], fw: 'stock' };
 }
 // The feed rates of a speed profile into the settings.
 function applySpeeds(s) {
@@ -451,14 +461,14 @@ const WHERE_TEXT = { parts: 'where it reaches parts', centre: "at the centre of 
 // `bed` is the print's bed temperature, °C: the cooling time follows it.
 function cycle(height, layout, s, sweep, bed) {
   if (refusal(height, layoutBack(layout), s, sweep, layout)) return null;
-  const v = s.v, out = [], line = t => out.push(t);
+  const v = s.v, out = [], line = t => out.push(t), cosmos = s.fw === 'cosmos', bin = binOf(s.fw);
   const up = height + v.margin, zFast = int(v.f_z_fast), zBend = int(v.f_z_bend), release = int(v.release_bed_temp);
   // Over the bin nothing but the enclosure's top stands above the plate: the bed comes all the way up, or as
   // far as the tallest part leaves top_room above the nozzle's height.
   const cool = Math.max(TOP_Z, height - v.top_room);
   const park = () => {
-    line(`G1 X${fixed(BIN_X, 1)} Y${fixed(BIN_Y_ENTRY, 1)} F${int(v.f_travel)} ; toolhead behind the plate`);
-    line(`G1 Y${fixed(BIN_Y, 1)} F${int(v.f_travel)} ; over the purge bin`);
+    line(`G1 X${fixed(bin.x, 1)} Y${fixed(bin.entry, 1)} F${int(v.f_travel)} ; toolhead behind the plate`);
+    line(`G1 Y${fixed(bin.y, 1)} F${int(v.f_travel)} ; over the purge bin`);
     line(`G1 Z${fixed(cool, 1)} F${zFast} ; plate ${cool === TOP_Z ? 'all the way' : 'as far as the parts allow'} up, under the fans`);
   };
   const blowAndEnd = () => {
@@ -470,7 +480,8 @@ function cycle(height, layout, s, sweep, bed) {
       line('M107');
       line('M106 P2 S0');
     }
-    line('M84');
+    // COSMOS: PRINT_END follows, and turns the motors off itself.
+    if (!cosmos) line('M84');
     line(`; ==== end ${MARK} ====`);
     return out.join('\n') + '\n';
   };
@@ -483,9 +494,15 @@ function cycle(height, layout, s, sweep, bed) {
   line('M106 S255 ; part fan');
   line('M106 P2 S255 ; auxiliary fan onto the plate');
   line(`TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=${release} ; wait for the bed to cool to ${release} C`);
-  // The CC2's firmware runs straight past TEMPERATURE_WAIT: the timed wait is the one that holds.
-  const from = bed > 0 ? bed : BED_UNKNOWN, coolS = Math.max(v.cool_min_s, coolSeconds(from, release));
-  if (coolS > 0) line(`G4 P${int(coolS * 1000)} ; cool ${Math.floor(coolS / 60)} min${coolS % 60 ? ` ${coolS % 60} s` : ''}: the bed from ${g(from)} to ${release} C, as the CC2's TEMPERATURE_WAIT is skipped`);
+  const span = t => `${Math.floor(t / 60)} min${t % 60 ? ` ${t % 60} s` : ''}`;
+  if (cosmos) {
+    // COSMOS holds at TEMPERATURE_WAIT until the bed is there; only the chosen minimum is timed.
+    if (v.cool_min_s > 0) line(`G4 P${int(v.cool_min_s * 1000)} ; cool at least ${span(v.cool_min_s)} in all`);
+  } else {
+    // The CC2's firmware runs straight past TEMPERATURE_WAIT: the timed wait is the one that holds.
+    const from = bed > 0 ? bed : BED_UNKNOWN, coolS = Math.max(v.cool_min_s, coolSeconds(from, release));
+    if (coolS > 0) line(`G4 P${int(coolS * 1000)} ; cool ${span(coolS)}: the bed from ${g(from)} to ${release} C, as the CC2's TEMPERATURE_WAIT is skipped`);
+  }
   line('M107');
   line('M106 P2 S0');
   line("; --- flex: the plate's tab rests on the bender and the plate bends ---");
@@ -638,8 +655,29 @@ function bedTemp(text, from, to) {
   return 0;
 }
 
+// The firmware a file was sliced for: COSMOS's profiles start with the PRINT_START macro, ELEGOO's own don't.
+function detectFirmware(text) {
+  const startAt = text.indexOf('; EXECUTABLE_BLOCK_START');
+  return startAt >= 0 && findLine(text, startAt, Math.min(text.length, startAt + PURGE_SPAN), 'PRINT_START', false) >= 0 ? 'cosmos' : 'stock';
+}
+// COSMOS: PRINT_START purges on the plate when cosmos.conf has adaptive_purge on. For this file only, the
+// setting is turned off around PRINT_START (it is read there, and cosmos.conf restores it at the next boot)
+// and turned back on after it, so other prints keep their purge; then COSMOS's own PURGE primes the nozzle
+// over the bin and wipes it.
+const PURGE_SETTING = 'SET_GCODE_VARIABLE MACRO=_COSMOS_SETTINGS VARIABLE=adaptive_purge VALUE=';
+function cosmosPurge(text, body, limit) {
+  const start = findLine(text, body, limit, 'PRINT_START', false);
+  if (start < 0) return null;
+  const at = lineEnd(text, start, limit);
+  return {
+    start, end: at,
+    text: `; ${MARK}: no purge line on the plate the scoop sweeps, for this print only\n${PURGE_SETTING}False\n`
+      + text.slice(start, at) + `${PURGE_SETTING}True\n; ${MARK}: prime over the bin instead\nPURGE\n`,
+  };
+}
+
 // Everything the page shows and the download needs, or { error }.
-function inspect(text) {
+function inspect(text, fw = 'stock') {
   const startAt = text.indexOf('; EXECUTABLE_BLOCK_START');
   if (startAt < 0 || startAt > 512 * 1024) return { error: 'The file has no executable block: not an OrcaSlicer or ElegooSlicer file' };
   const body = lineEnd(text, startAt, text.length);
@@ -649,10 +687,18 @@ function inspect(text) {
   if (inBlock.includes(MARK) || inBlock.includes(FARMLOOP_MARK)) return { error: 'The file already has a removal cycle' };
   const model = /; printer_model = ([^\r\n]*)/.exec(text.slice(blockEnd));
   if (model && !model[1].includes('Centauri Carbon 2')) return { error: 'The file was sliced for another printer (' + model[1] + ')' };
-  const endGcode = text.lastIndexOf('CC2_END_GCODE', blockEnd);
-  if (endGcode < body) return { error: 'The file has no ELEGOO end G-code (CC2_END_GCODE)' };
-  const m84 = findLine(text, endGcode, blockEnd, 'M84', true);
-  const cutStart = m84 >= 0 ? m84 : blockEnd, cutEnd = m84 >= 0 ? lineEnd(text, m84, blockEnd) : blockEnd;
+  let cutStart, cutEnd;
+  if (fw === 'cosmos') {
+    // The cycle goes in right before PRINT_END, which stays: it parks, cleans the nozzle and turns the motors off.
+    const end = findLine(text, body, blockEnd, 'PRINT_END', true);
+    if (end < 0) return { error: 'The file has no PRINT_END: not sliced with a COSMOS profile' };
+    cutStart = cutEnd = end;
+  } else {
+    const endGcode = text.lastIndexOf('CC2_END_GCODE', blockEnd);
+    if (endGcode < body) return { error: 'The file has no ELEGOO end G-code (CC2_END_GCODE)' };
+    const m84 = findLine(text, endGcode, blockEnd, 'M84', true);
+    cutStart = m84 >= 0 ? m84 : blockEnd; cutEnd = m84 >= 0 ? lineEnd(text, m84, blockEnd) : blockEnd;
+  }
   let height = -1;
   const top = /; max_z_height: ([^\r\n]*)/.exec(text.slice(0, 8192));
   if (top) height = parseFloat(top[1]);
@@ -663,7 +709,7 @@ function inspect(text) {
   if (!(height > 0) || height > 1000) height = -1;
   const layout = parseLayout(text, Math.min(text.length, 512 * 1024));
   layoutHeights(text, layout);
-  let purge = findPurge(text, body);
+  let purge = fw === 'cosmos' ? cosmosPurge(text, body, cutStart) : findPurge(text, body);
   if (purge && purge.end > cutStart) purge = null;
   return { body, blockEnd, cutStart, cutEnd, height, layout, purge, bed: bedTemp(text, body, cutStart) };
 }
@@ -686,6 +732,7 @@ function build(text, info, s, copies) {
 // on (an end G-code without M84) and starts while they still are; a printer that lost its position refuses
 // the first move and nothing moves.
 function clearOnly(info, s, name) {
+  if (s.fw === 'cosmos') return { error: "COSMOS's PRINT_END turns the motors off, so a separate cycle could not start without homing. Download the processed print instead" };
   const sweep = !s.bendOnly;
   const why = refusal(info.height, layoutBack(info.layout), s, sweep, info.layout);
   if (why) return { error: why };
@@ -723,12 +770,13 @@ function load() {
     if (SPEEDS.push[saved.push]) s.push = saved.push;
     s.mode = SWEEP_MODES.includes(saved.mode) ? saved.mode : saved.custom === true ? 'manual' : 'complete';
     if (Array.isArray(saved.steps)) s.steps = saved.steps.filter(stepValid).slice(0, STEPS_MAX);
+    if (FIRMWARES.includes(saved.fw)) s.fw = saved.fw;
   } catch {}
   s.v.bend_before_z = s.v.bend_touch_z - BEND_APPROACH;
   return applySpeeds(s);
 }
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push, mode: settings.mode, steps: settings.steps })); } catch {}
+  try { localStorage.setItem(STORE, JSON.stringify({ v: settings.v, travel: settings.travel, push: settings.push, mode: settings.mode, steps: settings.steps, fw: settings.fw })); } catch {}
 }
 let settings = load(), source = null, info = null, fileName = '';
 const $ = id => document.getElementById(id);
@@ -945,7 +993,11 @@ function update() {
   const add = t => { const li = document.createElement('li'); li.textContent = t; facts.appendChild(li); };
   if (info.layout) add(`Parts: ${info.layout.map(o => `${o.name.replace(/\.stl_id_\d+_copy_\d+$/, '')} (${o.height > 0 ? o.height.toFixed(1) : '?'} mm)`).join(', ')}`);
   else add('No object labels in the file (turn on "Label objects" in OrcaSlicer): every column is swept for the tallest part.');
-  add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');
+  if (settings.fw === 'cosmos') {
+    add(info.purge ? 'Purge: adaptive_purge is turned off for this print\'s PRINT_START and back on after it, then PURGE primes the nozzle over the bin. cosmos.conf is not touched.'
+      : 'No PRINT_START line: the start is left as it is.');
+    add(`Cooling: TEMPERATURE_WAIT holds until the bed is at ${int(settings.v.release_bed_temp)} °C; the cycle goes right before PRINT_END.`);
+  } else add(info.purge ? 'Purge line on the front edge: moved into the bin.' : 'No front-edge purge line: the start is left as it is.');
   const sweep = !settings.bendOnly, why = refusal(info.height, layoutBack(info.layout), settings, sweep, info.layout);
   if (why) { setStatus('bad', 'Cannot clear this plate: ' + why); return; }
   if (sweep && usesPushes(settings)) add(`${customPlan(info.height, info.layout, settings).pushes.length} pushes in all${settings.mode === 'manual' ? `, from ${settings.steps.length} step${settings.steps.length === 1 ? '' : 's'} of the list` : ''}.`);
@@ -957,7 +1009,9 @@ function update() {
   } else add('Flex-only test: no sweep, and only one copy.');
   const copies = sweep ? Math.min(20, Math.max(1, Math.trunc(Number($('copies').value) || 1))) : 1;
   setStatus(warn.length ? 'warn' : 'ok', `Ready: ${copies} cop${copies === 1 ? 'y' : 'ies'}${settings.bendOnly ? ', flex-only test' : ''}${warn.length ? ', with the warning under Sweeps' : ''}.`);
-  $('download').disabled = $('showCycle').disabled = $('clearOnly').disabled = false;
+  $('download').disabled = $('showCycle').disabled = false;
+  // COSMOS's PRINT_END turns the motors off: a separate cycle file could never start (see clearOnly).
+  $('clearOnly').disabled = settings.fw === 'cosmos';
   $('cycle').textContent = cycle(info.height, info.layout, settings, sweep, info.bed);
 }
 
@@ -1168,7 +1222,8 @@ function render() {
   faces.push(...box(0, PLATE, 0, PLATE, -3, 0, css('--plate-top')));
   const reach = Y_BACK - v.scoop_ahead;
   faces.push({ pts: [[0, reach, 0.05], [PLATE, reach, 0.05], [PLATE, Y_BACK, 0.05], [0, Y_BACK, 0.05]], color: css('--bad'), alpha: 0.35, flat: true });
-  faces.push(...box(BIN_X - 14, BIN_X + 14, BIN_Y - 6, BIN_Y + 6, -14, -2, css('--warn')));
+  const bin = binOf(settings.fw);
+  faces.push(...box(bin.x - 14, bin.x + 14, bin.y - 6, bin.y + 6, -14, -2, css('--warn')));
   // Paused: the parts go see-through and each sweep that reaches a part is a ring around it, its own outline at the
   // height where the scoop's bottom edge meets it. Playing: solid parts, no rings.
   const showRings = !!film && !view.playing && !settings.bendOnly && !(film.still && !usesPushes(settings)), rings = [];
@@ -1410,7 +1465,17 @@ function open(file) {
   const reader = new FileReader();
   reader.onload = () => {
     source = reader.result;
-    info = inspect(source);
+    settings.fw = detectFirmware(source);
+    save();
+    readFile();
+  };
+  reader.onerror = () => setStatus('bad', 'Cannot read the file');
+  reader.readAsText(file);
+}
+// (Re)reads the loaded file for the chosen firmware.
+function readFile() {
+  if (source) {
+    info = inspect(source, settings.fw);
     if (!info.error) {
       info.walls = wallsOf(source);
       // Each part's X extent layer by layer, for pushes at a layer's centre.
@@ -1423,12 +1488,24 @@ function open(file) {
         });
       }
     }
-    renderSteps();
-    update();
-  };
-  reader.onerror = () => setStatus('bad', 'Cannot read the file');
-  reader.readAsText(file);
+  }
+  renderFirmware();
+  renderSteps();
+  update();
 }
+const FW_NOTES = {
+  stock: 'ELEGOO firmware: TEMPERATURE_WAIT is skipped, so the bed cools for a time worked out from the print\'s bed temperature.',
+  cosmos: 'COSMOS: the cycle waits for the bed to reach the release temperature, then PRINT_END parks, cleans the nozzle and turns the motors off.',
+};
+function renderFirmware() {
+  document.querySelectorAll('#firmware button').forEach(b => b.classList.toggle('on', b.dataset.fw === settings.fw));
+  $('fwNote').textContent = FW_NOTES[settings.fw] + (source && detectFirmware(source) !== settings.fw ? ' This file looks sliced for the other firmware.' : '');
+}
+document.querySelectorAll('#firmware button').forEach(b => b.addEventListener('click', () => {
+  settings.fw = b.dataset.fw;
+  save();
+  readFile();
+}));
 
 $('drop').addEventListener('click', () => $('file').click());
 $('drop').addEventListener('keydown', e => (e.key === 'Enter' || e.key === ' ') && $('file').click());
@@ -1567,6 +1644,7 @@ function renderSpeeds() {
 }
 renderFields();
 buildSliders();
+renderFirmware();
 renderSteps();
 renderSpeeds();
 update();
