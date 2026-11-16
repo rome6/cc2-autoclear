@@ -31,6 +31,23 @@ El archivo no sale de tu ordenador.
   hay que lanzarlo en cuanto termina la impresión, con los motores aún encendidos, así que el G-code de acabado
   no debe llevar `M84`. Si la impresora ha perdido la posición, debería rechazar el primer movimiento.
 
+## Firmware: de serie o COSMOS
+
+Un selector elige el firmware del archivo; al cargar uno se elige solo (los perfiles de COSMOS empiezan con
+`PRINT_START`) y se puede cambiar a mano.
+
+- **De serie (ELEGOO o Community):** todo lo de arriba, tal cual.
+- **[COSMOS](https://github.com/OpenCentauri/cosmos)** (Klipper/Kalico), con sus perfiles de OrcaSlicer:
+  - **Enfriado por temperatura:** COSMOS sí respeta `TEMPERATURE_WAIT`, así que el ciclo espera a que la cama
+    llegue a la temperatura de despegue, sin `G4` calculado. El mínimo de enfriado, si se pone, sigue siendo un `G4`.
+  - **Final:** el ciclo va justo antes de `PRINT_END`, que se queda: aparca, limpia la boquilla y apaga los motores.
+    El ciclo no lleva `M84`.
+  - **Purga:** después de `PRINT_START` se añade `PURGE`, la purga de COSMOS en el cubilete (y limpieza de boquilla).
+    Pon `adaptive_purge = False` en `cosmos.conf`; si no, `PRINT_START` también purga sobre la placa.
+  - **Cubilete:** la posición de `MOVE_TO_TRAY` de COSMOS (X 52,5, Y 264, entrando desde Y 255).
+  - **Solo el ciclo** no está disponible: `PRINT_END` apaga los motores y un archivo aparte no podría empezar sin
+    hacer home. Usa el archivo procesado (o las copias).
+
 ## La página
 
 - Deslizadores para la altura de la primera pasada, la separación y el número de pasadas (enlazados),
