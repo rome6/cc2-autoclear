@@ -23,7 +23,9 @@ El archivo no sale de tu ordenador.
      que llegan a sus propias piezas (según las etiquetas de objeto de Orca) y empieza justo detrás de ellas;
   4. vuelve sobre el cubilete, sube la cama igual que al enfriar, sopla sobre la placa limpia y apaga los motores.
 - **Rechaza** archivos que no son de la CC2, que ya tienen un ciclo, con piezas en la franja del fondo que la
-  pala no alcanza, o cuyos ajustes harían chocar el pórtico.
+  pala no alcanza, o cuyos ajustes harían chocar el pórtico. En el modo Completo también rechaza una separación
+  entre pasadas tan grande que el pórtico (al empujar otra columna) o la pala (al volver entre columnas) pasaría
+  por una pieza que ninguna pasada ha tocado aún, como una pieza baja cuya columna se saltó a las alturas de arriba.
 - **Copias:** puede repetir la impresión N veces en un solo archivo; cada copia imprime, limpia y empieza la siguiente.
 - **Prueba de solo doblado:** enfría y dobla sin barrer, para probar el doblador.
 - **Solo el ciclo:** descarga un archivo aparte con únicamente el enfriado y la retirada de esa impresión, para

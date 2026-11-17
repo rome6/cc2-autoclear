@@ -357,7 +357,7 @@ function refusal(height, back, s, sweep, layout) {
   if (Y_BACK - v.scoop_ahead <= Y_FRONT) return 'The scoop has no travel in Y';
   if (back > Y_BACK - v.scoop_ahead) return 'A part stands at the back of the plate, behind where the scoop starts';
   if (v.scoop_width <= v.column_overlap) return 'The column overlap must be smaller than the scoop';
-  return usesPushes(s) ? customPlan(height, layout, s).error : null;
+  return usesPushes(s) ? customPlan(height, layout, s).error : sweepClash(height, layout, s);
 }
 // Height under each column (0: empty) and the furthest-back Y there. Without a layout every column
 // holds the tallest part up to the back edge; a part of unknown height counts as the tallest.
@@ -385,6 +385,33 @@ function sweepPlan(height, layout, s) {
       yStart: Math.max(Math.min(heights[c].back + BEHIND + v.scoop_ahead, Y_BACK), yEnd),
     })),
   };
+}
+// The sweeps run as cycle() runs them, part by part: a part a sweep has hit counts as gone, as in
+// customPlan. One no sweep has touched yet still stands at its full height, so the gantry, which spans the
+// whole plate, must pass over it on every push, and the scoop over it on every return between columns.
+// A column skipped at a high level (its parts below the scoop) is exactly such a part at the lower ones.
+function sweepClash(height, layout, s) {
+  const v = s.v, plan = sweepPlan(height, layout, s), half = v.scoop_width / 2, last = plan.passes.length - 1;
+  const parts = layout && layout.length ? layout.map(o => ({ x0: o.x0, x1: o.x1, h: o.height > 0 ? Math.min(o.height, height) : height }))
+    : [{ x0: X_MIN, x1: X_MAX, h: height }];
+  const touched = new Set(), standing = () => Math.max(0, ...parts.filter((o, i) => !touched.has(i)).map(o => o.h));
+  let zNow = height + v.margin, returnAfter = -1;
+  for (let k = 0; k <= last; k++) {
+    const d = plan.passes[k];
+    for (let r = 0; r < (k === last ? Math.trunc(v.last_pass_repeats) : 1); ++r)
+      for (const c of plan.columns) {
+        if (!(c.under > 0) || (k !== last && c.under <= d + v.scoop_low)) continue;
+        if (standing() >= zNow + v.scoop_low)
+          return `The return after sweep ${returnAfter + 1} (bed at ${fixed(zNow, 1)} mm) would drive the scoop into a part no sweep has touched yet: use less height between sweeps, or a bigger bed drop to return`;
+        if (standing() >= d + v.gantry_low)
+          return `Sweep ${k + 1} at X ${fixed(c.x, 1)}: the gantry, at ${fixed(d + v.gantry_low, 1)} mm, would hit a part no earlier sweep has touched: use less height between sweeps`;
+        parts.forEach((o, i) => {
+          if (o.x1 > c.x - half && o.x0 < c.x + half && (k === last || o.h > d + v.scoop_low)) touched.add(i);
+        });
+        zNow = d + v.return_above_pass; returnAfter = k;
+      }
+  }
+  return null;
 }
 
 // ---- custom pushes: a list run in order, each at one height (the scoop's bottom edge above the plate)
